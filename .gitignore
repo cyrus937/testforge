@@ -1,0 +1,13 @@
+**/target
+/.env
+/venv
+**/.DS_Store
+/__pycache__
+_internal*
+**/__pycache__
+/.pytest_cache
+
+site/
+public/
+
+.coverage*
