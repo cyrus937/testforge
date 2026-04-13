@@ -1,0 +1,69 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "testforge"
+version = "0.1.0"
+description = "AI-powered semantic code search and test generation"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "numpy>=1.24",
+    "pydantic>=2.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+local = [
+    "sentence-transformers>=2.2",
+    "torch>=2.0",
+]
+openai = [
+    "openai>=1.0",
+]
+claude = [
+    "anthropic>=0.30",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+all = [
+    "testforge[local,openai,claude,dev]",
+]
+
+[tool.maturin]
+python-source = "python"
+module-name = "testforge_rust"
+manifest-path = "crates/testforge-python/Cargo.toml"
+features = ["pyo3/extension-module"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
