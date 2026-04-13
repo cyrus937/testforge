@@ -754,6 +754,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "streaming-iterator",
  "testforge-core",
  "thiserror",
  "tokio",
