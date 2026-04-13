@@ -1,0 +1,19 @@
+[package]
+name = "testforge-python"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Python bindings for TestForge via PyO3"
+
+[lib]
+name = "testforge_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+testforge-core = { path = "../testforge-core" }
+testforge-indexer = { path = "../testforge-indexer" }
+
+pyo3 = { version = "0.23", features = ["extension-module"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
