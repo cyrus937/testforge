@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -49,7 +48,7 @@ class EmbeddingCache:
         Texts with a cached embedding are returned immediately;
         only cache-missing texts are sent to the underlying provider.
         """
-        results: list[Optional[EmbeddingResult]] = [None] * len(texts)
+        results: list[EmbeddingResult | None] = [None] * len(texts)
         to_compute: list[tuple[int, str]] = []
 
         for i, text in enumerate(texts):
@@ -69,7 +68,7 @@ class EmbeddingCache:
             missing_texts = [t for _, t in to_compute]
             computed = self._provider.embed_texts(missing_texts)
 
-            for (original_idx, text), result in zip(to_compute, computed):
+            for (original_idx, text), result in zip(to_compute, computed, strict=False):
                 self._put_cached(text, result.vector)
                 results[original_idx] = result
 
@@ -115,7 +114,7 @@ class EmbeddingCache:
         key = hashlib.sha256(text.encode("utf-8")).hexdigest()
         return self._cache_dir / f"{key}.npy"
 
-    def _get_cached(self, text: str) -> Optional[np.ndarray]:
+    def _get_cached(self, text: str) -> np.ndarray | None:
         path = self._cache_path(text)
         if path.exists():
             try:

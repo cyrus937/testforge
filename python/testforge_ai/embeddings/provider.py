@@ -78,10 +78,7 @@ class EmbeddingProvider(ABC):
         Prepending the language helps the model disambiguate syntax
         across programming languages.
         """
-        if language:
-            prefixed = f"# Language: {language}\n{code}"
-        else:
-            prefixed = code
+        prefixed = f"# Language: {language}\n{code}" if language else code
         return self.embed_single(prefixed)
 
     def embed_query(self, query: str) -> EmbeddingResult:

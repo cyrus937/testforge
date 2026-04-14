@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,7 @@ class ClaudeProvider:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         model: str = DEFAULT_MODEL,
     ):
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
@@ -65,7 +64,7 @@ class ClaudeProvider:
         prompt: str,
         max_tokens: int = 4096,
         temperature: float = 0.2,
-        system: Optional[str] = None,
+        system: str | None = None,
     ) -> str:
         """
         Generate a completion from the Claude API.

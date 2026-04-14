@@ -94,7 +94,6 @@ def _target_section(target: SymbolInfo) -> str:
 def _dependencies_section(deps: list[SymbolInfo]) -> str:
     parts = ["## Dependencies\n\nThese functions are called by the target:"]
     for dep in deps[:5]:  # Limit to avoid context overflow
-        sig = dep.signature or dep.name
         parts.append(f"### `{dep.qualified_name}`\n```{dep.language}\n{dep.source}\n```")
     return "\n\n".join(parts)
 

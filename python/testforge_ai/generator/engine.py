@@ -11,11 +11,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from testforge_ai.bridge import SymbolInfo, TestForgeBridge
-from testforge_ai.generator.prompts.unit_test import build_unit_test_prompt
 from testforge_ai.generator.prompts.edge_cases import build_edge_case_prompt
+from testforge_ai.generator.prompts.unit_test import build_unit_test_prompt
 from testforge_ai.generator.providers.claude import ClaudeProvider
 
 logger = logging.getLogger(__name__)
@@ -72,7 +71,7 @@ class TestGenerator:
         self,
         project_root: Path,
         provider: str = "claude",
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ):
         self.bridge = TestForgeBridge(project_root)
         self.provider = self._init_provider(provider, api_key)
@@ -241,7 +240,7 @@ class TestGenerator:
         # No code block found — return raw output
         return raw
 
-    def _init_provider(self, name: str, api_key: Optional[str]):
+    def _init_provider(self, name: str, api_key: str | None):
         """Initialize the LLM provider."""
         if name == "claude":
             return ClaudeProvider(api_key=api_key)

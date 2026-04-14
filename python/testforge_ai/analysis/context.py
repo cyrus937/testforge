@@ -10,10 +10,8 @@ generated tests superior to naive per-function generation.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from testforge_ai.bridge import SymbolInfo
 
@@ -68,11 +66,11 @@ class CodeContext:
 class ProjectConventions:
     """Detected patterns in the project's test suite."""
 
-    test_file_pattern: Optional[str] = None
-    assertion_style: Optional[str] = None
+    test_file_pattern: str | None = None
+    assertion_style: str | None = None
     uses_fixtures: bool = False
-    mock_library: Optional[str] = None
-    docstring_style: Optional[str] = None
+    mock_library: str | None = None
+    docstring_style: str | None = None
 
 
 class ContextBuilder:

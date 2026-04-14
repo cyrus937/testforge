@@ -9,7 +9,6 @@ Uses the `all-MiniLM-L6-v2` model by default (384-dimensional vectors,
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import numpy as np
 
@@ -47,7 +46,7 @@ class LocalEmbeddingProvider(EmbeddingProvider):
     def __init__(
         self,
         model_name: str = DEFAULT_MODEL,
-        device: Optional[str] = None,
+        device: str | None = None,
         batch_size: int = 64,
         normalize: bool = True,
     ):
@@ -96,7 +95,7 @@ class LocalEmbeddingProvider(EmbeddingProvider):
         )
 
         results = []
-        for text, vector in zip(texts, vectors):
+        for text, vector in zip(texts, vectors, strict=False):
             results.append(
                 EmbeddingResult(
                     vector=np.array(vector, dtype=np.float32),
