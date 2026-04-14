@@ -1,253 +1,220 @@
-//! Language grammar registry for tree-sitter.
+//! Tree-sitter grammar registry.
 //!
-//! Each supported language is backed by a compiled tree-sitter grammar.
-//! This module provides a central registry to look up the right
-//! [`tree_sitter::Language`] for a given [`testforge_core::Language`].
+//! Maps [`Language`] variants to their tree-sitter grammar and the
+//! S-expression queries used to locate symbols in the AST.
 
-use std::collections::HashMap;
-use std::sync::OnceLock;
+use testforge_core::models::Language;
+use tree_sitter::Language as TsLanguage;
 
-use testforge_core::{Language, TestForgeError, Result};
-
-/// Wrapper around tree-sitter language + query strings specific
-/// to each supported language.
-#[derive(Clone)]
-pub struct LanguageSupport {
-    /// The compiled tree-sitter grammar.
-    pub ts_language: tree_sitter::Language,
-
-    /// S-expression query that extracts function definitions.
-    pub functions_query: &'static str,
-
-    /// S-expression query that extracts class / struct definitions.
-    pub classes_query: &'static str,
-
-    /// S-expression query that extracts import statements.
-    pub imports_query: &'static str,
-
-    /// S-expression query that extracts call expressions.
-    pub calls_query: &'static str,
+/// Returns the compiled tree-sitter grammar for a given language.
+pub fn grammar_for(language: Language) -> Option<TsLanguage> {
+    match language {
+        Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
+        Language::JavaScript => Some(tree_sitter_javascript::LANGUAGE.into()),
+        Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
+        // Languages with grammars not yet wired up return None.
+        _ => None,
+    }
 }
 
-/// Global, lazily-initialized language registry.
-static REGISTRY: OnceLock<HashMap<Language, LanguageSupport>> = OnceLock::new();
-
-/// Return the [`LanguageSupport`] for `lang`, or an error if unsupported.
-pub fn get_language_support(lang: Language) -> Result<&'static LanguageSupport> {
-    let registry = REGISTRY.get_or_init(build_registry);
-    registry.get(&lang).ok_or(TestForgeError::UnsupportedLanguage {
-        language: lang.to_string(),
-    })
+/// Returns the tree-sitter S-expression query that captures symbols
+/// (functions, classes, methods) for a given language.
+///
+/// Each query uses named captures:
+/// - `@name`      — the symbol's identifier
+/// - `@definition` — the full definition node (used for source range)
+/// - `@docstring`  — documentation comment, if any
+/// - `@body`       — the function/method body
+pub fn symbol_query_for(language: Language) -> Option<&'static str> {
+    match language {
+        Language::Python => Some(PYTHON_SYMBOLS_QUERY),
+        Language::JavaScript => Some(JAVASCRIPT_SYMBOLS_QUERY),
+        Language::Rust => Some(RUST_SYMBOLS_QUERY),
+        _ => None,
+    }
 }
 
-/// Return every language that has a grammar loaded.
+// ── Python ───────────────────────────────────────────────────────────
+
+const PYTHON_SYMBOLS_QUERY: &str = r#"
+; Top-level and nested function definitions
+(function_definition
+  name: (identifier) @name
+  parameters: (parameters) @params
+  body: (block) @body
+) @definition
+
+; Class definitions
+(class_definition
+  name: (identifier) @class_name
+  body: (block) @class_body
+) @class_definition
+
+; Method definitions inside classes
+(class_definition
+  body: (block
+    (function_definition
+      name: (identifier) @method_name
+      parameters: (parameters) @method_params
+      body: (block) @method_body
+    ) @method_definition
+  )
+)
+
+; Decorated definitions
+(decorated_definition
+  (decorator) @decorator
+  definition: [
+    (function_definition
+      name: (identifier) @decorated_name
+    )
+    (class_definition
+      name: (identifier) @decorated_class_name
+    )
+  ]
+) @decorated_definition
+
+; Module-level assignments (constants)
+(module
+  (expression_statement
+    (assignment
+      left: (identifier) @const_name
+      right: (_) @const_value
+    )
+  ) @constant_definition
+)
+"#;
+
+// ── JavaScript / TypeScript ──────────────────────────────────────────
+
+const JAVASCRIPT_SYMBOLS_QUERY: &str = r#"
+; Function declarations
+(function_declaration
+  name: (identifier) @name
+  parameters: (formal_parameters) @params
+  body: (statement_block) @body
+) @definition
+
+; Arrow functions assigned to variables
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: (arrow_function
+      parameters: (formal_parameters) @params
+      body: (_) @body
+    )
+  )
+) @definition
+
+; Class declarations
+(class_declaration
+  name: (identifier) @class_name
+  body: (class_body) @class_body
+) @class_definition
+
+; Method definitions inside classes
+(class_declaration
+  body: (class_body
+    (method_definition
+      name: (property_identifier) @method_name
+      parameters: (formal_parameters) @method_params
+      body: (statement_block) @method_body
+    ) @method_definition
+  )
+)
+
+; Exported function declarations
+(export_statement
+  declaration: (function_declaration
+    name: (identifier) @exported_name
+  )
+) @export_definition
+"#;
+
+// ── Rust ─────────────────────────────────────────────────────────────
+
+const RUST_SYMBOLS_QUERY: &str = r#"
+; Function definitions (including pub)
+(function_item
+  name: (identifier) @name
+  parameters: (parameters) @params
+  body: (block) @body
+) @definition
+
+; Struct definitions
+(struct_item
+  name: (type_identifier) @struct_name
+) @struct_definition
+
+; Enum definitions
+(enum_item
+  name: (type_identifier) @enum_name
+) @enum_definition
+
+; Trait definitions
+(trait_item
+  name: (type_identifier) @trait_name
+) @trait_definition
+
+; Impl blocks with methods
+(impl_item
+  type: (type_identifier) @impl_type
+  body: (declaration_list
+    (function_item
+      name: (identifier) @method_name
+      parameters: (parameters) @method_params
+      body: (block) @method_body
+    ) @method_definition
+  )
+)
+
+; Module declarations
+(mod_item
+  name: (identifier) @mod_name
+) @mod_definition
+"#;
+
+/// Check if a language has a tree-sitter grammar available.
+pub fn is_supported(language: Language) -> bool {
+    grammar_for(language).is_some()
+}
+
+/// Return all currently supported languages.
 pub fn supported_languages() -> Vec<Language> {
-    let registry = REGISTRY.get_or_init(build_registry);
-    registry.keys().copied().collect()
+    vec![Language::Python, Language::JavaScript, Language::Rust]
 }
 
-// ─── Registry Builder ───────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn build_registry() -> HashMap<Language, LanguageSupport> {
-    let mut m = HashMap::new();
+    #[test]
+    fn python_grammar_loads() {
+        assert!(grammar_for(Language::Python).is_some());
+    }
 
-    // ── Python ──────────────────────────────────────────────────
-    m.insert(
-        Language::Python,
-        LanguageSupport {
-            ts_language: tree_sitter_python::LANGUAGE.into(),
-            functions_query: r#"
-                (function_definition
-                    name: (identifier) @func.name
-                    parameters: (parameters) @func.params
-                    body: (block) @func.body
-                ) @func.def
-            "#,
-            classes_query: r#"
-                (class_definition
-                    name: (identifier) @class.name
-                    body: (block) @class.body
-                ) @class.def
-            "#,
-            imports_query: r#"
-                [
-                    (import_statement
-                        name: (dotted_name) @import.name
-                    ) @import.def
-                    (import_from_statement
-                        module_name: (dotted_name) @import.module
-                    ) @import.def
-                ]
-            "#,
-            calls_query: r#"
-                (call
-                    function: [
-                        (identifier) @call.name
-                        (attribute
-                            attribute: (identifier) @call.name
-                        )
-                    ]
-                ) @call.expr
-            "#,
-        },
-    );
+    #[test]
+    fn javascript_grammar_loads() {
+        assert!(grammar_for(Language::JavaScript).is_some());
+    }
 
-    // ── Rust ────────────────────────────────────────────────────
-    m.insert(
-        Language::Rust,
-        LanguageSupport {
-            ts_language: tree_sitter_rust::LANGUAGE.into(),
-            functions_query: r#"
-                (function_item
-                    name: (identifier) @func.name
-                    parameters: (parameters) @func.params
-                    body: (block) @func.body
-                ) @func.def
-            "#,
-            classes_query: r#"
-                [
-                    (struct_item
-                        name: (type_identifier) @class.name
-                        body: (field_declaration_list)? @class.body
-                    ) @class.def
-                    (impl_item
-                        type: (type_identifier) @class.name
-                        body: (declaration_list) @class.body
-                    ) @class.def
-                ]
-            "#,
-            imports_query: r#"
-                (use_declaration
-                    argument: (_) @import.name
-                ) @import.def
-            "#,
-            calls_query: r#"
-                (call_expression
-                    function: [
-                        (identifier) @call.name
-                        (field_expression
-                            field: (field_identifier) @call.name
-                        )
-                        (scoped_identifier
-                            name: (identifier) @call.name
-                        )
-                    ]
-                ) @call.expr
-            "#,
-        },
-    );
+    #[test]
+    fn rust_grammar_loads() {
+        assert!(grammar_for(Language::Rust).is_some());
+    }
 
-    // ── JavaScript ──────────────────────────────────────────────
-    m.insert(
-        Language::JavaScript,
-        LanguageSupport {
-            ts_language: tree_sitter_javascript::LANGUAGE.into(),
-            functions_query: r#"
-                [
-                    (function_declaration
-                        name: (identifier) @func.name
-                        body: (statement_block) @func.body
-                    ) @func.def
-                    (arrow_function
-                        body: (_) @func.body
-                    ) @func.def
-                ]
-            "#,
-            classes_query: r#"
-                (class_declaration
-                    name: (identifier) @class.name
-                    body: (class_body) @class.body
-                ) @class.def
-            "#,
-            imports_query: r#"
-                (import_statement
-                    source: (string) @import.name
-                ) @import.def
-            "#,
-            calls_query: r#"
-                (call_expression
-                    function: [
-                        (identifier) @call.name
-                        (member_expression
-                            property: (property_identifier) @call.name
-                        )
-                    ]
-                ) @call.expr
-            "#,
-        },
-    );
+    #[test]
+    fn unsupported_language_returns_none() {
+        assert!(grammar_for(Language::Go).is_none());
+    }
 
-    // ── TypeScript (re-uses JS grammar augmented with types) ────
-    m.insert(
-        Language::TypeScript,
-        LanguageSupport {
-            ts_language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            // TypeScript shares the same node names as JavaScript
-            // for function/class/import queries.
-            functions_query: r#"
-                [
-                    (function_declaration
-                        name: (identifier) @func.name
-                        body: (statement_block) @func.body
-                    ) @func.def
-                    (arrow_function
-                        body: (_) @func.body
-                    ) @func.def
-                ]
-            "#,
-            classes_query: r#"
-                (class_declaration
-                    name: (type_identifier) @class.name
-                    body: (class_body) @class.body
-                ) @class.def
-            "#,
-            imports_query: r#"
-                (import_statement
-                    source: (string) @import.name
-                ) @import.def
-            "#,
-            calls_query: r#"
-                (call_expression
-                    function: [
-                        (identifier) @call.name
-                        (member_expression
-                            property: (property_identifier) @call.name
-                        )
-                    ]
-                ) @call.expr
-            "#,
-        },
-    );
-
-    // ── Java ────────────────────────────────────────────────────
-    m.insert(
-        Language::Java,
-        LanguageSupport {
-            ts_language: tree_sitter_java::LANGUAGE.into(),
-            functions_query: r#"
-                (method_declaration
-                    name: (identifier) @func.name
-                    body: (block) @func.body
-                ) @func.def
-            "#,
-            classes_query: r#"
-                (class_declaration
-                    name: (identifier) @class.name
-                    body: (class_body) @class.body
-                ) @class.def
-            "#,
-            imports_query: r#"
-                (import_declaration
-                    (scoped_identifier) @import.name
-                ) @import.def
-            "#,
-            calls_query: r#"
-                (method_invocation
-                    name: (identifier) @call.name
-                ) @call.expr
-            "#,
-        },
-    );
-
-    m
+    #[test]
+    fn supported_languages_matches_grammars() {
+        for lang in supported_languages() {
+            assert!(
+                is_supported(lang),
+                "{lang} listed as supported but has no grammar"
+            );
+        }
+    }
 }

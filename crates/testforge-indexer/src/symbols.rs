@@ -1,376 +1,750 @@
-//! Symbol extraction from parsed ASTs.
+//! Language-aware symbol extraction from tree-sitter ASTs.
 //!
-//! Given a tree-sitter parse tree and a set of queries, this module
-//! walks the AST and produces [`CodeSymbol`] values for every
-//! function, class, method, and import it finds.
+//! Each supported language has a dedicated extractor that walks the AST
+//! and produces [`Symbol`] instances. The extractors understand
+//! language-specific idioms: Python decorators, Rust `impl` blocks,
+//! JavaScript arrow functions, etc.
 
 use std::path::Path;
 
-use streaming_iterator::StreamingIterator;
-use tracing::debug;
-use tree_sitter::{Node, Query, QueryCursor};
+use testforge_core::models::{Language, Symbol, SymbolKind, Visibility};
+use testforge_core::Result;
+use tree_sitter::Node;
+use uuid::Uuid;
 
-use testforge_core::{CodeSymbol, Language, Result, SymbolKind, TestForgeError};
+use crate::compute_hash;
 
-use crate::languages::LanguageSupport;
-
-/// Extract all symbols from `source` using the provided language support.
+/// Entry point: dispatch to the appropriate language extractor.
 pub fn extract_symbols(
     source: &str,
-    file_path: &Path,
+    root: &Node,
     language: Language,
-    lang_support: &LanguageSupport,
-    tree: &tree_sitter::Tree,
-) -> Result<Vec<CodeSymbol>> {
-    let root = tree.root_node();
-    let src = source.as_bytes();
+    file_path: &Path,
+) -> Result<Vec<Symbol>> {
+    match language {
+        Language::Python => extract_python_symbols(source, root, file_path),
+        Language::JavaScript | Language::TypeScript => {
+            extract_javascript_symbols(source, root, file_path, language)
+        }
+        Language::Rust => extract_rust_symbols(source, root, file_path),
+        other => Ok(Vec::new()),
+    }
+}
 
+// ── Python Extractor ─────────────────────────────────────────────────
+
+fn extract_python_symbols(
+    source: &str,
+    root: &Node,
+    file_path: &Path,
+) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
+    let source_bytes = source.as_bytes();
 
-    // 1) Extract functions
-    extract_with_query(
-        &mut symbols,
-        src,
-        source,
-        root,
-        lang_support,
-        lang_support.functions_query,
-        SymbolKind::Function,
-        file_path,
-        language,
-    )?;
-
-    // 2) Extract classes / structs
-    extract_with_query(
-        &mut symbols,
-        src,
-        source,
-        root,
-        lang_support,
-        lang_support.classes_query,
-        SymbolKind::Class,
-        file_path,
-        language,
-    )?;
-
-    // 3) Extract imports
-    extract_imports(&mut symbols, src, root, lang_support, file_path, language)?;
-
-    // 4) Detect methods inside classes (post-processing)
-    promote_methods(&mut symbols);
-
-    // 5) Extract call dependencies for each symbol
-    attach_dependencies(&mut symbols, src, root, lang_support)?;
-
-    debug!(
-        file = %file_path.display(),
-        count = symbols.len(),
-        "symbols extracted"
-    );
+    walk_python_node(root, source_bytes, file_path, None, &mut symbols);
 
     Ok(symbols)
 }
 
-// ─── Internal Helpers ───────────────────────────────────────────────
-
-/// Run a tree-sitter query and create symbols from every match.
-#[allow(clippy::too_many_arguments)]
-fn extract_with_query(
-    out: &mut Vec<CodeSymbol>,
-    src: &[u8],
-    source_text: &str,
-    root: Node,
-    lang_support: &LanguageSupport,
-    query_src: &str,
-    default_kind: SymbolKind,
+fn walk_python_node(
+    node: &Node,
+    source: &[u8],
     file_path: &Path,
-    language: Language,
-) -> Result<()> {
-    let query = compile_query(lang_support, query_src)?;
-    let mut cursor = QueryCursor::new();
+    parent_class: Option<&str>,
+    symbols: &mut Vec<Symbol>,
+) {
+    let mut cursor = node.walk();
 
-    // Identify the capture indices we care about.
-    let name_idx = query.capture_index_for_name("func.name")
-        .or_else(|| query.capture_index_for_name("class.name"));
-    let body_idx = query.capture_index_for_name("func.body")
-        .or_else(|| query.capture_index_for_name("class.body"));
-    let def_idx = query.capture_index_for_name("func.def")
-        .or_else(|| query.capture_index_for_name("class.def"));
-
-    let mut matches = cursor.matches(&query, root, src);
-    while let Some(m) = matches.next() {
-        let name_node = name_idx.and_then(|i| find_capture(&m, i));
-        let body_node = body_idx.and_then(|i| find_capture(&m, i));
-        let def_node = def_idx.and_then(|i| find_capture(&m, i));
-
-        let Some(name_n) = name_node else { continue };
-        let name = node_text(name_n, src);
-
-        let def_n = def_node.unwrap_or(name_n);
-        let line_start = def_n.start_position().row + 1;
-        let line_end = def_n.end_position().row + 1;
-
-        let body = def_node
-            .map(|n| node_text(n, src))
-            .unwrap_or_default();
-
-        let signature = build_signature(def_n, body_node, src);
-        let doc = extract_doc_comment(def_n, source_text);
-
-        let id = CodeSymbol::compute_id(&file_path.to_path_buf(), &name, line_start);
-
-        out.push(CodeSymbol {
-            name,
-            kind: default_kind,
-            language,
-            file_path: file_path.to_path_buf(),
-            line_start,
-            line_end,
-            body,
-            signature,
-            doc,
-            dependencies: Vec::new(),
-            id,
-        });
-    }
-
-    Ok(())
-}
-
-/// Extract import statements.
-fn extract_imports(
-    out: &mut Vec<CodeSymbol>,
-    src: &[u8],
-    root: Node,
-    lang_support: &LanguageSupport,
-    file_path: &Path,
-    language: Language,
-) -> Result<()> {
-    let query = compile_query(lang_support, lang_support.imports_query)?;
-    let mut cursor = QueryCursor::new();
-
-    let name_idx = query.capture_index_for_name("import.name")
-        .or_else(|| query.capture_index_for_name("import.module"));
-    let def_idx = query.capture_index_for_name("import.def");
-
-    let mut matches = cursor.matches(&query, root, src);
-    while let Some(m) = matches.next() {
-        let name_node = name_idx.and_then(|i| find_capture(&m, i));
-        let def_node = def_idx.and_then(|i| find_capture(&m, i));
-
-        let Some(name_n) = name_node else { continue };
-        let name = node_text(name_n, src);
-        let def_n = def_node.unwrap_or(name_n);
-        let line_start = def_n.start_position().row + 1;
-        let line_end = def_n.end_position().row + 1;
-        let body = node_text(def_n, src);
-
-        let id = CodeSymbol::compute_id(&file_path.to_path_buf(), &name, line_start);
-
-        out.push(CodeSymbol {
-            name,
-            kind: SymbolKind::Import,
-            language,
-            file_path: file_path.to_path_buf(),
-            line_start,
-            line_end,
-            body: body.clone(),
-            signature: body,
-            doc: None,
-            dependencies: Vec::new(),
-            id,
-        });
-    }
-
-    Ok(())
-}
-
-/// Attach call-site dependencies to each symbol by matching calls
-/// within the symbol's byte range.
-fn attach_dependencies(
-    symbols: &mut [CodeSymbol],
-    src: &[u8],
-    root: Node,
-    lang_support: &LanguageSupport,
-) -> Result<()> {
-    let query = compile_query(lang_support, lang_support.calls_query)?;
-    let mut cursor = QueryCursor::new();
-
-    let name_idx = query.capture_index_for_name("call.name");
-
-    // Collect all call sites: (byte_offset, called_name).
-    let mut calls: Vec<(usize, String)> = Vec::new();
-    let mut matches = cursor.matches(&query, root, src);
-    while let Some(m) = matches.next() {
-        if let Some(n) = name_idx.and_then(|i| find_capture(&m, i)) {
-            calls.push((n.start_byte(), node_text(n, src)));
-        }
-    }
-
-    // For each symbol, collect calls that fall within its byte range.
-    // We re-derive the byte range from line numbers (approximate but
-    // correct for well-formed source).
-    let line_offsets = build_line_offsets(src);
-
-    for sym in symbols.iter_mut() {
-        if sym.kind == SymbolKind::Import {
-            continue;
-        }
-        let start_byte = line_offset(&line_offsets, sym.line_start);
-        let end_byte = line_offset(&line_offsets, sym.line_end + 1);
-
-        let mut deps: Vec<String> = calls
-            .iter()
-            .filter(|(offset, _)| *offset >= start_byte && *offset < end_byte)
-            .map(|(_, name)| name.clone())
-            .collect();
-
-        deps.sort();
-        deps.dedup();
-        // Don't list self-recursion as a dependency.
-        deps.retain(|d| d != &sym.name);
-
-        sym.dependencies = deps;
-    }
-
-    Ok(())
-}
-
-/// If a function is defined inside a class, re-label it as a Method.
-fn promote_methods(symbols: &mut [CodeSymbol]) {
-    // Gather class line ranges.
-    let class_ranges: Vec<(usize, usize)> = symbols
-        .iter()
-        .filter(|s| s.kind == SymbolKind::Class)
-        .map(|s| (s.line_start, s.line_end))
-        .collect();
-
-    for sym in symbols.iter_mut() {
-        if sym.kind == SymbolKind::Function {
-            let inside_class = class_ranges
-                .iter()
-                .any(|(cs, ce)| sym.line_start >= *cs && sym.line_end <= *ce);
-            if inside_class {
-                sym.kind = SymbolKind::Method;
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "function_definition" => {
+                if let Some(sym) = extract_python_function(&child, source, file_path, parent_class)
+                {
+                    symbols.push(sym);
+                }
             }
-        }
-    }
-}
+            "class_definition" => {
+                if let Some(class_sym) = extract_python_class(&child, source, file_path) {
+                    let class_name = class_sym.name.clone();
+                    symbols.push(class_sym);
 
-// ─── Tree-Sitter Utilities ──────────────────────────────────────────
-
-fn compile_query(
-    lang_support: &LanguageSupport,
-    query_src: &str,
-) -> Result<Query> {
-    Query::new(&lang_support.ts_language, query_src).map_err(|e| {
-        TestForgeError::ParseError {
-            path: "<query>".into(),
-            reason: format!("invalid tree-sitter query: {e}"),
-        }
-    })
-}
-
-fn find_capture<'a>(
-    m: &'a tree_sitter::QueryMatch<'a, 'a>,
-    idx: u32,
-) -> Option<Node<'a>> {
-    m.captures
-        .iter()
-        .find(|c| c.index == idx)
-        .map(|c| c.node)
-}
-
-fn node_text(node: Node, src: &[u8]) -> String {
-    node.utf8_text(src).unwrap_or("").to_string()
-}
-
-/// Build the signature line: everything from the definition node
-/// up to (but not including) the body node.
-fn build_signature(def_node: Node, body_node: Option<Node>, src: &[u8]) -> String {
-    match body_node {
-        Some(body) => {
-            let start = def_node.start_byte();
-            let end = body.start_byte();
-            let raw = &src[start..end];
-            String::from_utf8_lossy(raw).trim().to_string()
-        }
-        None => node_text(def_node, src),
-    }
-}
-
-/// Extract a leading docstring or comment block from the node just
-/// before `def_node`.
-fn extract_doc_comment(def_node: Node, source: &str) -> Option<String> {
-    // Check the first child for Python-style docstrings.
-    // (function_definition -> body -> block -> first child = expression_statement -> string)
-    if let Some(body) = def_node.child_by_field_name("body") {
-        if let Some(first_stmt) = body.named_child(0) {
-            if first_stmt.kind() == "expression_statement" {
-                if let Some(string_node) = first_stmt.named_child(0) {
-                    if string_node.kind() == "string" {
-                        let text = string_node
-                            .utf8_text(source.as_bytes())
-                            .unwrap_or("")
-                            .to_string();
-                        return Some(clean_docstring(&text));
+                    // Recurse into class body to extract methods
+                    if let Some(body) = child.child_by_field_name("body") {
+                        walk_python_node(&body, source, file_path, Some(&class_name), symbols);
                     }
+                }
+            }
+            "decorated_definition" => {
+                // Unwrap decorated definitions to get the inner function/class
+                walk_python_node(&child, source, file_path, parent_class, symbols);
+            }
+            _ => {
+                // Recurse into other compound nodes (if/else, try/except, etc.)
+                // to find nested definitions — Python allows functions anywhere.
+                if child.child_count() > 0 && parent_class.is_none() {
+                    // Only recurse at module level; inside classes we handle it above.
+                    walk_python_node(&child, source, file_path, parent_class, symbols);
                 }
             }
         }
     }
+}
 
-    // Check preceding sibling for comment blocks.
-    let mut comments = Vec::new();
-    let mut prev = def_node.prev_named_sibling();
-    while let Some(node) = prev {
-        if node.kind() == "comment" {
-            comments.push(
-                node.utf8_text(source.as_bytes())
-                    .unwrap_or("")
-                    .to_string(),
-            );
-            prev = node.prev_named_sibling();
-        } else {
-            break;
-        }
-    }
+fn extract_python_function(
+    node: &Node,
+    source: &[u8],
+    file_path: &Path,
+    parent_class: Option<&str>,
+) -> Option<Symbol> {
+    let name_node = node.child_by_field_name("name")?;
+    let name = node_text(&name_node, source)?;
 
-    if comments.is_empty() {
-        None
+    let kind = if parent_class.is_some() {
+        SymbolKind::Method
     } else {
-        comments.reverse();
-        Some(comments.join("\n"))
-    }
+        SymbolKind::Function
+    };
+
+    let qualified_name = match parent_class {
+        Some(cls) => format!("{cls}.{name}"),
+        None => name.clone(),
+    };
+
+    let full_source = node_text(node, source)?;
+    let signature = extract_python_signature(node, source);
+    let docstring = extract_python_docstring(node, source);
+    let dependencies = extract_python_calls(node, source);
+
+    let visibility = if name.starts_with("__") && name.ends_with("__") {
+        Visibility::Public // dunder methods are public
+    } else if name.starts_with('_') {
+        Visibility::Private
+    } else {
+        Visibility::Public
+    };
+
+    Some(Symbol {
+        id: Uuid::new_v4(),
+        name,
+        qualified_name,
+        kind,
+        language: Language::Python,
+        file_path: file_path.to_path_buf(),
+        start_line: node.start_position().row + 1,
+        end_line: node.end_position().row + 1,
+        source: full_source,
+        signature,
+        docstring,
+        dependencies,
+        parent: parent_class.map(String::from),
+        visibility,
+        content_hash: compute_hash(&node_text(node, source).unwrap_or_default()),
+    })
 }
 
-/// Strip triple-quote delimiters and normalize indentation.
-fn clean_docstring(raw: &str) -> String {
-    let trimmed = raw
-        .trim()
-        .trim_start_matches("\"\"\"")
-        .trim_start_matches("'''")
-        .trim_end_matches("\"\"\"")
-        .trim_end_matches("'''")
-        .trim();
-    trimmed.to_string()
+fn extract_python_class(
+    node: &Node,
+    source: &[u8],
+    file_path: &Path,
+) -> Option<Symbol> {
+    let name_node = node.child_by_field_name("name")?;
+    let name = node_text(&name_node, source)?;
+    let full_source = node_text(node, source)?;
+    let docstring = extract_python_docstring(node, source);
+
+    Some(Symbol {
+        id: Uuid::new_v4(),
+        name: name.clone(),
+        qualified_name: name,
+        kind: SymbolKind::Class,
+        language: Language::Python,
+        file_path: file_path.to_path_buf(),
+        start_line: node.start_position().row + 1,
+        end_line: node.end_position().row + 1,
+        source: full_source,
+        signature: None,
+        docstring,
+        dependencies: Vec::new(),
+        parent: None,
+        visibility: Visibility::Public,
+        content_hash: compute_hash(&node_text(node, source).unwrap_or_default()),
+    })
 }
 
-// ─── Line-offset helpers ────────────────────────────────────────────
+/// Extract the function signature line (e.g., `def foo(a: int, b: str) -> bool`).
+fn extract_python_signature(node: &Node, source: &[u8]) -> Option<String> {
+    let name = node_text(&node.child_by_field_name("name")?, source)?;
+    let params = node_text(&node.child_by_field_name("parameters")?, source)?;
+    let return_type = node
+        .child_by_field_name("return_type")
+        .and_then(|n| node_text(&n, source));
 
-fn build_line_offsets(src: &[u8]) -> Vec<usize> {
-    let mut offsets = vec![0];
-    for (i, &b) in src.iter().enumerate() {
-        if b == b'\n' {
-            offsets.push(i + 1);
+    let sig = match return_type {
+        Some(rt) => format!("def {name}{params} -> {rt}"),
+        None => format!("def {name}{params}"),
+    };
+    Some(sig)
+}
+
+/// Extract the docstring from the first expression statement in the body.
+fn extract_python_docstring(node: &Node, source: &[u8]) -> Option<String> {
+    let body = node.child_by_field_name("body")?;
+    let first_stmt = body.child(0)?;
+
+    if first_stmt.kind() == "expression_statement" {
+        let expr = first_stmt.child(0)?;
+        if expr.kind() == "string" {
+            let raw = node_text(&expr, source)?;
+            // Strip triple quotes
+            let trimmed = raw
+                .trim_start_matches("\"\"\"")
+                .trim_start_matches("'''")
+                .trim_end_matches("\"\"\"")
+                .trim_end_matches("'''")
+                .trim();
+            return Some(trimmed.to_string());
         }
     }
-    offsets
+    None
 }
 
-fn line_offset(offsets: &[usize], line_1based: usize) -> usize {
-    if line_1based == 0 || line_1based > offsets.len() {
-        return offsets.last().copied().unwrap_or(0);
+/// Collect names of functions called within this node.
+fn extract_python_calls(node: &Node, source: &[u8]) -> Vec<String> {
+    let mut calls = Vec::new();
+    collect_calls_recursive(node, source, &mut calls);
+    calls.sort();
+    calls.dedup();
+    calls
+}
+
+fn collect_calls_recursive(node: &Node, source: &[u8], calls: &mut Vec<String>) {
+    if node.kind() == "call" {
+        if let Some(func) = node.child_by_field_name("function") {
+            if let Some(name) = node_text(&func, source) {
+                calls.push(name);
+            }
+        }
     }
-    offsets[line_1based - 1]
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_calls_recursive(&child, source, calls);
+    }
+}
+
+// ── JavaScript / TypeScript Extractor ────────────────────────────────
+
+fn extract_javascript_symbols(
+    source: &str,
+    root: &Node,
+    file_path: &Path,
+    language: Language,
+) -> Result<Vec<Symbol>> {
+    let mut symbols = Vec::new();
+    let source_bytes = source.as_bytes();
+
+    walk_js_node(root, source_bytes, file_path, language, None, &mut symbols);
+
+    Ok(symbols)
+}
+
+fn walk_js_node(
+    node: &Node,
+    source: &[u8],
+    file_path: &Path,
+    language: Language,
+    parent_class: Option<&str>,
+    symbols: &mut Vec<Symbol>,
+) {
+    let mut cursor = node.walk();
+
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "function_declaration" => {
+                if let Some(sym) = extract_js_function(&child, source, file_path, language) {
+                    symbols.push(sym);
+                }
+            }
+            "class_declaration" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if let Some(name) = node_text(&name_node, source) {
+                        let full_source = node_text(&child, source).unwrap_or_default();
+
+                        symbols.push(Symbol {
+                            id: Uuid::new_v4(),
+                            name: name.clone(),
+                            qualified_name: name.clone(),
+                            kind: SymbolKind::Class,
+                            language,
+                            file_path: file_path.to_path_buf(),
+                            start_line: child.start_position().row + 1,
+                            end_line: child.end_position().row + 1,
+                            source: full_source.clone(),
+                            signature: None,
+                            docstring: None,
+                            dependencies: Vec::new(),
+                            parent: None,
+                            visibility: Visibility::Public,
+                            content_hash: compute_hash(&full_source),
+                        });
+
+                        // Recurse into class body for methods
+                        if let Some(body) = child.child_by_field_name("body") {
+                            walk_js_node(&body, source, file_path, language, Some(&name), symbols);
+                        }
+                    }
+                }
+            }
+            "method_definition" => {
+                if let Some(sym) =
+                    extract_js_method(&child, source, file_path, language, parent_class)
+                {
+                    symbols.push(sym);
+                }
+            }
+            "lexical_declaration" | "variable_declaration" => {
+                // Look for arrow function assignments
+                if let Some(sym) = extract_js_arrow_function(&child, source, file_path, language) {
+                    symbols.push(sym);
+                }
+            }
+            "export_statement" => {
+                walk_js_node(&child, source, file_path, language, parent_class, symbols);
+            }
+            _ => {
+                if child.child_count() > 0 {
+                    walk_js_node(&child, source, file_path, language, parent_class, symbols);
+                }
+            }
+        }
+    }
+}
+
+fn extract_js_function(
+    node: &Node,
+    source: &[u8],
+    file_path: &Path,
+    language: Language,
+) -> Option<Symbol> {
+    let name_node = node.child_by_field_name("name")?;
+    let name = node_text(&name_node, source)?;
+    let full_source = node_text(node, source)?;
+    let params = node
+        .child_by_field_name("parameters")
+        .and_then(|n| node_text(&n, source));
+
+    let signature = params.map(|p| format!("function {name}{p}"));
+
+    Some(Symbol {
+        id: Uuid::new_v4(),
+        name: name.clone(),
+        qualified_name: name,
+        kind: SymbolKind::Function,
+        language,
+        file_path: file_path.to_path_buf(),
+        start_line: node.start_position().row + 1,
+        end_line: node.end_position().row + 1,
+        source: full_source.clone(),
+        signature,
+        docstring: None,
+        dependencies: Vec::new(),
+        parent: None,
+        visibility: Visibility::Public,
+        content_hash: compute_hash(&full_source),
+    })
+}
+
+fn extract_js_method(
+    node: &Node,
+    source: &[u8],
+    file_path: &Path,
+    language: Language,
+    parent_class: Option<&str>,
+) -> Option<Symbol> {
+    let name_node = node.child_by_field_name("name")?;
+    let name = node_text(&name_node, source)?;
+    let full_source = node_text(node, source)?;
+
+    let qualified_name = match parent_class {
+        Some(cls) => format!("{cls}.{name}"),
+        None => name.clone(),
+    };
+
+    Some(Symbol {
+        id: Uuid::new_v4(),
+        name,
+        qualified_name,
+        kind: SymbolKind::Method,
+        language,
+        file_path: file_path.to_path_buf(),
+        start_line: node.start_position().row + 1,
+        end_line: node.end_position().row + 1,
+        source: full_source.clone(),
+        signature: None,
+        docstring: None,
+        dependencies: Vec::new(),
+        parent: parent_class.map(String::from),
+        visibility: Visibility::Public,
+        content_hash: compute_hash(&full_source),
+    })
+}
+
+fn extract_js_arrow_function(
+    node: &Node,
+    source: &[u8],
+    file_path: &Path,
+    language: Language,
+) -> Option<Symbol> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "variable_declarator" {
+            let name_node = child.child_by_field_name("name")?;
+            let value_node = child.child_by_field_name("value")?;
+            if value_node.kind() == "arrow_function" {
+                let name = node_text(&name_node, source)?;
+                let full_source = node_text(node, source)?;
+
+                return Some(Symbol {
+                    id: Uuid::new_v4(),
+                    name: name.clone(),
+                    qualified_name: name,
+                    kind: SymbolKind::Function,
+                    language,
+                    file_path: file_path.to_path_buf(),
+                    start_line: node.start_position().row + 1,
+                    end_line: node.end_position().row + 1,
+                    source: full_source.clone(),
+                    signature: None,
+                    docstring: None,
+                    dependencies: Vec::new(),
+                    parent: None,
+                    visibility: Visibility::Public,
+                    content_hash: compute_hash(&full_source),
+                });
+            }
+        }
+    }
+    None
+}
+
+// ── Rust Extractor ───────────────────────────────────────────────────
+
+fn extract_rust_symbols(
+    source: &str,
+    root: &Node,
+    file_path: &Path,
+) -> Result<Vec<Symbol>> {
+    let mut symbols = Vec::new();
+    let source_bytes = source.as_bytes();
+
+    walk_rust_node(root, source_bytes, file_path, None, &mut symbols);
+
+    Ok(symbols)
+}
+
+fn walk_rust_node(
+    node: &Node,
+    source: &[u8],
+    file_path: &Path,
+    impl_type: Option<&str>,
+    symbols: &mut Vec<Symbol>,
+) {
+    let mut cursor = node.walk();
+
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "function_item" => {
+                if let Some(sym) = extract_rust_function(&child, source, file_path, impl_type) {
+                    symbols.push(sym);
+                }
+            }
+            "struct_item" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if let Some(name) = node_text(&name_node, source) {
+                        let full_source = node_text(&child, source).unwrap_or_default();
+                        let vis = detect_rust_visibility(&child, source);
+
+                        symbols.push(Symbol {
+                            id: Uuid::new_v4(),
+                            name: name.clone(),
+                            qualified_name: name,
+                            kind: SymbolKind::Struct,
+                            language: Language::Rust,
+                            file_path: file_path.to_path_buf(),
+                            start_line: child.start_position().row + 1,
+                            end_line: child.end_position().row + 1,
+                            source: full_source.clone(),
+                            signature: None,
+                            docstring: None,
+                            dependencies: Vec::new(),
+                            parent: None,
+                            visibility: vis,
+                            content_hash: compute_hash(&full_source),
+                        });
+                    }
+                }
+            }
+            "enum_item" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if let Some(name) = node_text(&name_node, source) {
+                        let full_source = node_text(&child, source).unwrap_or_default();
+
+                        symbols.push(Symbol {
+                            id: Uuid::new_v4(),
+                            name: name.clone(),
+                            qualified_name: name,
+                            kind: SymbolKind::Enum,
+                            language: Language::Rust,
+                            file_path: file_path.to_path_buf(),
+                            start_line: child.start_position().row + 1,
+                            end_line: child.end_position().row + 1,
+                            source: full_source.clone(),
+                            signature: None,
+                            docstring: None,
+                            dependencies: Vec::new(),
+                            parent: None,
+                            visibility: Visibility::Public,
+                            content_hash: compute_hash(&full_source),
+                        });
+                    }
+                }
+            }
+            "trait_item" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if let Some(name) = node_text(&name_node, source) {
+                        let full_source = node_text(&child, source).unwrap_or_default();
+
+                        symbols.push(Symbol {
+                            id: Uuid::new_v4(),
+                            name: name.clone(),
+                            qualified_name: name,
+                            kind: SymbolKind::Trait,
+                            language: Language::Rust,
+                            file_path: file_path.to_path_buf(),
+                            start_line: child.start_position().row + 1,
+                            end_line: child.end_position().row + 1,
+                            source: full_source.clone(),
+                            signature: None,
+                            docstring: None,
+                            dependencies: Vec::new(),
+                            parent: None,
+                            visibility: Visibility::Public,
+                            content_hash: compute_hash(&full_source),
+                        });
+                    }
+                }
+            }
+            "impl_item" => {
+                // Extract the type being implemented
+                let type_name = child
+                    .child_by_field_name("type")
+                    .and_then(|n| node_text(&n, source));
+
+                if let Some(body) = child.child_by_field_name("body") {
+                    walk_rust_node(&body, source, file_path, type_name.as_deref(), symbols);
+                }
+            }
+            "mod_item" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if let Some(name) = node_text(&name_node, source) {
+                        let full_source = node_text(&child, source).unwrap_or_default();
+
+                        symbols.push(Symbol {
+                            id: Uuid::new_v4(),
+                            name: name.clone(),
+                            qualified_name: name,
+                            kind: SymbolKind::Module,
+                            language: Language::Rust,
+                            file_path: file_path.to_path_buf(),
+                            start_line: child.start_position().row + 1,
+                            end_line: child.end_position().row + 1,
+                            source: full_source.clone(),
+                            signature: None,
+                            docstring: None,
+                            dependencies: Vec::new(),
+                            parent: None,
+                            visibility: Visibility::Public,
+                            content_hash: compute_hash(&full_source),
+                        });
+                    }
+                }
+            }
+            _ => {
+                if child.child_count() > 0 {
+                    walk_rust_node(&child, source, file_path, impl_type, symbols);
+                }
+            }
+        }
+    }
+}
+
+fn extract_rust_function(
+    node: &Node,
+    source: &[u8],
+    file_path: &Path,
+    impl_type: Option<&str>,
+) -> Option<Symbol> {
+    let name_node = node.child_by_field_name("name")?;
+    let name = node_text(&name_node, source)?;
+    let full_source = node_text(node, source)?;
+
+    let kind = if impl_type.is_some() {
+        SymbolKind::Method
+    } else {
+        SymbolKind::Function
+    };
+
+    let qualified_name = match impl_type {
+        Some(t) => format!("{t}::{name}"),
+        None => name.clone(),
+    };
+
+    let visibility = detect_rust_visibility(node, source);
+
+    // Build signature from the function item text up to the opening brace
+    let signature = full_source
+        .find('{')
+        .map(|idx| full_source[..idx].trim().to_string());
+
+    Some(Symbol {
+        id: Uuid::new_v4(),
+        name,
+        qualified_name,
+        kind,
+        language: Language::Rust,
+        file_path: file_path.to_path_buf(),
+        start_line: node.start_position().row + 1,
+        end_line: node.end_position().row + 1,
+        source: full_source.clone(),
+        signature,
+        docstring: None,
+        dependencies: Vec::new(),
+        parent: impl_type.map(String::from),
+        visibility,
+        content_hash: compute_hash(&full_source),
+    })
+}
+
+fn detect_rust_visibility(node: &Node, source: &[u8]) -> Visibility {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "visibility_modifier" {
+            let text = node_text(&child, source).unwrap_or_default();
+            return if text.contains("pub(crate)") {
+                Visibility::Internal
+            } else if text.contains("pub(super)") {
+                Visibility::Protected
+            } else {
+                Visibility::Public
+            };
+        }
+    }
+    Visibility::Private
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+/// Safely extract the text content of a tree-sitter node.
+fn node_text(node: &Node, source: &[u8]) -> Option<String> {
+    let start = node.start_byte();
+    let end = node.end_byte();
+    if end <= source.len() {
+        std::str::from_utf8(&source[start..end])
+            .ok()
+            .map(String::from)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::Parser;
+
+    fn parse_python(source: &str) -> Vec<Symbol> {
+        let mut parser = Parser::new().unwrap();
+        parser
+            .parse_and_extract(source, Language::Python, Path::new("test.py"))
+            .unwrap()
+    }
+
+    #[test]
+    fn python_function_with_docstring() {
+        let symbols = parse_python(
+            r#"
+def compute_tax(amount: float, rate: float) -> float:
+    """Calculate tax for a given amount."""
+    return amount * rate
+"#,
+        );
+
+        let func = symbols.iter().find(|s| s.name == "compute_tax").unwrap();
+        assert_eq!(func.kind, SymbolKind::Function);
+        assert!(func.signature.as_ref().unwrap().contains("compute_tax"));
+        assert_eq!(
+            func.docstring.as_deref(),
+            Some("Calculate tax for a given amount.")
+        );
+    }
+
+    #[test]
+    fn python_private_method_detection() {
+        let symbols = parse_python(
+            r#"
+class Foo:
+    def _private(self):
+        pass
+
+    def __dunder__(self):
+        pass
+
+    def public(self):
+        pass
+"#,
+        );
+
+        let private = symbols.iter().find(|s| s.name == "_private").unwrap();
+        assert_eq!(private.visibility, Visibility::Private);
+
+        let dunder = symbols.iter().find(|s| s.name == "__dunder__").unwrap();
+        assert_eq!(dunder.visibility, Visibility::Public);
+
+        let public = symbols.iter().find(|s| s.name == "public").unwrap();
+        assert_eq!(public.visibility, Visibility::Public);
+    }
+
+    #[test]
+    fn python_method_has_parent() {
+        let symbols = parse_python(
+            r#"
+class Service:
+    def handle(self):
+        pass
+"#,
+        );
+
+        let method = symbols.iter().find(|s| s.name == "handle").unwrap();
+        assert_eq!(method.parent.as_deref(), Some("Service"));
+        assert_eq!(method.qualified_name, "Service.handle");
+        assert_eq!(method.kind, SymbolKind::Method);
+    }
+
+    #[test]
+    fn python_function_dependencies() {
+        let symbols = parse_python(
+            r#"
+def process(data):
+    validated = validate(data)
+    result = transform(validated)
+    save(result)
+    return result
+"#,
+        );
+
+        let func = symbols.iter().find(|s| s.name == "process").unwrap();
+        assert!(func.dependencies.contains(&"validate".to_string()));
+        assert!(func.dependencies.contains(&"transform".to_string()));
+        assert!(func.dependencies.contains(&"save".to_string()));
+    }
 }

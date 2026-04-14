@@ -1,164 +1,153 @@
-//! Source code parser built on tree-sitter.
+//! Tree-sitter parsing engine.
 //!
-//! This module owns the [`tree_sitter::Parser`] instances and exposes
-//! a high-level `parse_file` function that takes raw source code and
-//! returns extracted [`CodeSymbol`]s.
+//! Wraps tree-sitter's C parser in a safe Rust API and delegates
+//! symbol extraction to language-specific handlers in [`symbols`].
 
 use std::path::Path;
 
-use tracing::{debug, instrument, warn};
+use testforge_core::models::{Language, Symbol};
+use testforge_core::{Result, TestForgeError};
+use tracing::debug;
 
-use testforge_core::{CodeSymbol, Language, Result, TestForgeError};
+use crate::languages;
+use crate::symbols;
 
-use crate::languages::{get_language_support, LanguageSupport};
-use crate::symbols::extract_symbols;
-
-/// Parse a single source file and extract all symbols.
+/// Thread-local tree-sitter parser wrapper.
 ///
-/// # Arguments
-/// * `source` – the raw UTF-8 source code.
-/// * `file_path` – path relative to project root (used in symbol IDs).
-/// * `language` – the language to parse the file as.
-///
-/// # Errors
-/// Returns [`TestForgeError::ParseError`] if tree-sitter cannot parse
-/// the file, or [`TestForgeError::UnsupportedLanguage`] if no grammar
-/// is registered for `language`.
-#[instrument(skip(source), fields(file = %file_path.display()))]
-pub fn parse_file(
-    source: &str,
-    file_path: &Path,
-    language: Language,
-) -> Result<Vec<CodeSymbol>> {
-    let lang_support = get_language_support(language)?;
-    let tree = parse_source(source, lang_support)?;
-
-    if tree.root_node().has_error() {
-        warn!(
-            file = %file_path.display(),
-            "tree-sitter reported parse errors – extraction may be partial"
-        );
-    }
-
-    extract_symbols(source, file_path, language, lang_support, &tree)
+/// Tree-sitter parsers are not `Send`, so each thread needs its own.
+/// For single-threaded use (Phase 1), a single `Parser` instance suffices.
+pub struct Parser {
+    inner: tree_sitter::Parser,
 }
 
-/// Detect the language from a file path's extension and parse it.
-///
-/// Returns `Ok(None)` if the extension is unrecognised (not an error,
-/// the file is simply skipped).
-pub fn parse_file_auto(
-    source: &str,
-    file_path: &Path,
-) -> Result<Option<(Language, Vec<CodeSymbol>)>> {
-    let ext = file_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-
-    match Language::from_extension(ext) {
-        Some(lang) => {
-            let symbols = parse_file(source, file_path, lang)?;
-            Ok(Some((lang, symbols)))
-        }
-        None => {
-            debug!(ext, "skipping file with unrecognised extension");
-            Ok(None)
-        }
+impl Parser {
+    /// Create a new parser instance.
+    pub fn new() -> Result<Self> {
+        let inner = tree_sitter::Parser::new();
+        Ok(Self { inner })
     }
-}
 
-// ─── Internals ──────────────────────────────────────────────────────
-
-/// Create a tree-sitter parser configured for the given language and
-/// parse the source code.
-fn parse_source(
-    source: &str,
-    lang_support: &LanguageSupport,
-) -> Result<tree_sitter::Tree> {
-    let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(&lang_support.ts_language)
-        .map_err(|e| TestForgeError::ParseError {
-            path: "<init>".into(),
-            reason: format!("failed to set parser language: {e}"),
+    /// Parse source code and extract all symbols from it.
+    ///
+    /// This is the main entry point: it configures tree-sitter for the
+    /// given language, parses the source into an AST, then walks the tree
+    /// to extract symbols.
+    pub fn parse_and_extract(
+        &mut self,
+        source: &str,
+        language: Language,
+        file_path: &Path,
+    ) -> Result<Vec<Symbol>> {
+        let grammar = languages::grammar_for(language).ok_or_else(|| {
+            TestForgeError::UnsupportedLanguage {
+                language: language.to_string(),
+            }
         })?;
 
-    parser
-        .parse(source, None)
-        .ok_or_else(|| TestForgeError::ParseError {
-            path: "<parse>".into(),
-            reason: "tree-sitter returned no tree (timeout or cancellation)".into(),
-        })
+        self.inner.set_language(&grammar).map_err(|e| {
+            TestForgeError::internal(format!("Failed to set language {language}: {e}"))
+        })?;
+
+        let tree = self
+            .inner
+            .parse(source, None)
+            .ok_or_else(|| TestForgeError::parse_error(file_path, "tree-sitter parse returned None"))?;
+
+        let root = tree.root_node();
+
+        // Check for parse errors
+        if root.has_error() {
+            debug!(
+                path = %file_path.display(),
+                "Parse tree contains errors — extracting symbols from valid subtrees"
+            );
+        }
+
+        let symbols = symbols::extract_symbols(source, &root, language, file_path)?;
+
+        debug!(
+            path = %file_path.display(),
+            language = %language,
+            symbol_count = symbols.len(),
+            "Extracted symbols"
+        );
+
+        Ok(symbols)
+    }
+
+    /// Parse source code and return the raw AST (for debugging / inspection).
+    pub fn parse_to_tree(
+        &mut self,
+        source: &str,
+        language: Language,
+    ) -> Result<tree_sitter::Tree> {
+        let grammar = languages::grammar_for(language).ok_or_else(|| {
+            TestForgeError::UnsupportedLanguage {
+                language: language.to_string(),
+            }
+        })?;
+
+        self.inner.set_language(&grammar).map_err(|e| {
+            TestForgeError::internal(format!("Failed to set language {language}: {e}"))
+        })?;
+
+        self.inner
+            .parse(source, None)
+            .ok_or_else(|| TestForgeError::internal("tree-sitter parse returned None"))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn parse_simple_python_function() {
+        let mut parser = Parser::new().unwrap();
         let source = r#"
 def greet(name: str) -> str:
     """Say hello."""
     return f"Hello, {name}!"
 "#;
-        let symbols = parse_file(source, &PathBuf::from("hello.py"), Language::Python)
-            .expect("parse should succeed");
 
-        assert!(!symbols.is_empty(), "should extract at least one symbol");
+        let symbols = parser
+            .parse_and_extract(source, Language::Python, Path::new("test.py"))
+            .unwrap();
+
+        assert!(!symbols.is_empty(), "Should extract at least one symbol");
         let func = symbols.iter().find(|s| s.name == "greet").unwrap();
-        assert_eq!(func.kind, testforge_core::SymbolKind::Function);
-        assert!(func.signature.contains("greet"));
+        assert_eq!(func.kind, testforge_core::models::SymbolKind::Function);
     }
 
     #[test]
     fn parse_python_class_with_methods() {
+        let mut parser = Parser::new().unwrap();
         let source = r#"
-class UserService:
-    """Manages user operations."""
+class Calculator:
+    """A simple calculator."""
 
-    def __init__(self, db):
-        self.db = db
+    def add(self, a: int, b: int) -> int:
+        return a + b
 
-    def get_user(self, user_id: int):
-        return self.db.query(user_id)
-
-    def delete_user(self, user_id: int):
-        self.db.delete(user_id)
+    def subtract(self, a: int, b: int) -> int:
+        return a - b
 "#;
-        let symbols = parse_file(source, &PathBuf::from("service.py"), Language::Python)
-            .expect("parse should succeed");
 
-        let class = symbols.iter().find(|s| s.name == "UserService");
-        assert!(class.is_some(), "should find UserService class");
+        let symbols = parser
+            .parse_and_extract(source, Language::Python, Path::new("calc.py"))
+            .unwrap();
 
-        let methods: Vec<_> = symbols
-            .iter()
-            .filter(|s| s.kind == testforge_core::SymbolKind::Method)
-            .collect();
-        assert!(
-            methods.len() >= 2,
-            "should find at least 2 methods, got {}",
-            methods.len()
-        );
+        let class = symbols.iter().find(|s| s.name == "Calculator");
+        assert!(class.is_some(), "Should find the Calculator class");
+
+        let methods: Vec<_> = symbols.iter().filter(|s| s.parent.is_some()).collect();
+        assert!(methods.len() >= 2, "Should find at least 2 methods");
     }
 
     #[test]
-    fn parse_auto_detects_language() {
-        let source = "fn main() { println!(\"hello\"); }";
-        let result = parse_file_auto(source, &PathBuf::from("main.rs"))
-            .expect("should not error");
-        assert!(result.is_some());
-        let (lang, _) = result.unwrap();
-        assert_eq!(lang, Language::Rust);
-    }
-
-    #[test]
-    fn unknown_extension_returns_none() {
-        let result = parse_file_auto("data", &PathBuf::from("file.xyz"))
-            .expect("should not error");
-        assert!(result.is_none());
+    fn unsupported_language_returns_error() {
+        let mut parser = Parser::new().unwrap();
+        let result = parser.parse_and_extract("package main", Language::Go, Path::new("main.go"));
+        assert!(result.is_err());
     }
 }
