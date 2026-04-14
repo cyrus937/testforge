@@ -3,15 +3,16 @@ resolver = "2"
 members = [
     "crates/testforge-core",
     "crates/testforge-indexer",
+    "crates/testforge-search",
     "crates/testforge-cli",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["TestForge Contributors"]
+authors = ["Cyrille"]
 license = "MIT"
-repository = "https://github.com/testforge/testforge"
+repository = "https://github.com/cyrus937/testforge"
 description = "Semantic code search and AI-powered test generation"
 rust-version = "1.75"
 
@@ -49,6 +50,9 @@ walkdir = "2.5"
 
 # Search
 tantivy = "0.22"
+ordered-float = "4.5"
+parking_lot = "0.12"
+rayon = "1.10"
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env", "color"] }

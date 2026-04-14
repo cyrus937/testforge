@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 testforge-core = { path = "../testforge-core" }
 testforge-indexer = { path = "../testforge-indexer" }
+testforge-search = { path = "../testforge-search" }
 
 clap.workspace = true
 colored.workspace = true
