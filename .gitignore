@@ -1,13 +1,31 @@
-**/target
-/.env
-/venv
-**/.DS_Store
-/__pycache__
-_internal*
-**/__pycache__
-/.pytest_cache
+# Rust
+/target/
+Cargo.lock
 
-site/
-public/
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+*.so
 
-.coverage*
+# TestForge runtime data
+.testforge/index/
+.testforge/cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
