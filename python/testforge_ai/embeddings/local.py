@@ -63,11 +63,11 @@ class LocalEmbeddingProvider(EmbeddingProvider):
 
         try:
             from sentence_transformers import SentenceTransformer
-        except ImportError:
+        except ImportError as exc:
             raise ImportError(
                 "sentence-transformers is required for local embeddings. "
                 "Install with: pip install sentence-transformers"
-            )
+            ) from exc
 
         logger.info("Loading embedding model '%s'...", self._model_name)
         self._model = SentenceTransformer(

@@ -49,10 +49,10 @@ class ClaudeProvider:
         if self._client is None:
             try:
                 import anthropic
-            except ImportError:
+            except ImportError as exc:
                 raise ImportError(
                     "anthropic package required. Install with: pip install anthropic"
-                )
+                ) from exc
 
             self._client = anthropic.Anthropic(api_key=self._api_key)
             logger.debug("Anthropic client initialized (model=%s)", self._model)
