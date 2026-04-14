@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  testforge:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ../:/project:ro        # Mount project read-only
+      - testforge-data:/project/.testforge  # Persist index data
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - RUST_LOG=info
+    ports:
+      - "7654:7654"            # API server
+    command: ["index", "."]
+
+  testforge-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ../:/project:ro
+      - testforge-data:/project/.testforge
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    ports:
+      - "7654:7654"
+    command: ["serve", "--host", "0.0.0.0"]
+
+volumes:
+  testforge-data:
