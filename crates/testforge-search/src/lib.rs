@@ -18,12 +18,17 @@
 //! ## Usage
 //!
 //! ```no_run
-//! use testforge_search::SearchEngine;
+//! use testforge_search::{SearchEngine, SearchQuery};
 //! use testforge_core::Config;
 //! use std::path::Path;
 //!
+//! # fn main() -> testforge_core::Result<()> {
 //! let engine = SearchEngine::open(Path::new(".testforge/search"), &Config::default())?;
-//! let results = engine.search("payment validation", 10)?;
+//! let query = SearchQuery::new("payment validation").with_limit(10);
+//! let results = engine.search(&query, None)?;
+//! # let _ = results;
+//! # Ok(())
+//! # }
 //! ```
 
 pub mod hybrid;
@@ -283,7 +288,12 @@ impl SearchEngine {
                     }
                 }
                 if let Some(ref prefix) = query.path_prefix {
-                    if !r.symbol.file_path.to_string_lossy().starts_with(prefix.as_str()) {
+                    if !r
+                        .symbol
+                        .file_path
+                        .to_string_lossy()
+                        .starts_with(prefix.as_str())
+                    {
                         return false;
                     }
                 }

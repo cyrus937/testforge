@@ -75,16 +75,18 @@ impl HybridSearcher {
         for (rank, result) in text_results.iter().enumerate() {
             let rrf_score = text_weight / (self.k + (rank + 1) as f64);
 
-            let entry = scores.entry(result.symbol.id).or_insert_with(|| FusionEntry {
-                rrf_score: 0.0,
-                symbol: result.symbol.clone(),
-                in_text: false,
-                in_vector: false,
-                text_rank: None,
-                vector_rank: None,
-                text_score: 0.0,
-                vector_score: 0.0,
-            });
+            let entry = scores
+                .entry(result.symbol.id)
+                .or_insert_with(|| FusionEntry {
+                    rrf_score: 0.0,
+                    symbol: result.symbol.clone(),
+                    in_text: false,
+                    in_vector: false,
+                    text_rank: None,
+                    vector_rank: None,
+                    text_score: 0.0,
+                    vector_score: 0.0,
+                });
 
             entry.rrf_score += rrf_score;
             entry.in_text = true;
@@ -178,10 +180,7 @@ impl HybridSearcher {
         }
 
         let mut sorted: Vec<_> = scores.into_iter().collect();
-        sorted.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         sorted.truncate(limit);
         sorted
     }
@@ -303,7 +302,10 @@ mod tests {
         let results = hybrid.fuse(&text, &vector, 0.5, 10);
 
         let both = results.iter().find(|r| r.symbol.id == both_id).unwrap();
-        let text_only = results.iter().find(|r| r.symbol.name == "text_only").unwrap();
+        let text_only = results
+            .iter()
+            .find(|r| r.symbol.name == "text_only")
+            .unwrap();
 
         assert!(
             both.score > text_only.score,
@@ -346,11 +348,7 @@ mod tests {
         let list1 = vec![(id_a, 0.9), (id_b, 0.7)];
         let list2 = vec![(id_b, 0.95), (id_c, 0.8)];
 
-        let results = hybrid.fuse_generic(
-            &[list1, list2],
-            &[0.5, 0.5],
-            10,
-        );
+        let results = hybrid.fuse_generic(&[list1, list2], &[0.5, 0.5], 10);
 
         // id_b appears in both lists → should rank highest
         assert_eq!(results[0].0, id_b);

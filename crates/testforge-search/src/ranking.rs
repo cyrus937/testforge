@@ -83,7 +83,8 @@ pub fn deduplicate(results: &mut Vec<SearchResult>) {
 /// Ensures no single file contributes more than `max_per_file`
 /// results in the final output.
 pub fn diversify(results: &mut Vec<SearchResult>, max_per_file: usize) {
-    let mut file_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut file_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
 
     results.retain(|r| {
         let path = r.symbol.file_path.to_string_lossy().to_string();
@@ -102,12 +103,7 @@ pub fn explain_ranking(result: &SearchResult, query: &str) -> String {
     let query_lower = query.to_lowercase();
 
     // Check where the query matched
-    if result
-        .symbol
-        .name
-        .to_lowercase()
-        .contains(&query_lower)
-    {
+    if result.symbol.name.to_lowercase().contains(&query_lower) {
         factors.push("name match");
     }
     if result
@@ -127,12 +123,7 @@ pub fn explain_ranking(result: &SearchResult, query: &str) -> String {
     {
         factors.push("docstring match");
     }
-    if result
-        .symbol
-        .source
-        .to_lowercase()
-        .contains(&query_lower)
-    {
+    if result.symbol.source.to_lowercase().contains(&query_lower) {
         factors.push("source code match");
     }
 
@@ -147,7 +138,7 @@ pub fn explain_ranking(result: &SearchResult, query: &str) -> String {
     format!(
         "Score: {:.3} ({}) — {}",
         result.score,
-        MatchSourceDisplay(result.match_source).to_string(),
+        MatchSourceDisplay(result.match_source),
         factors.join(", ")
     )
 }

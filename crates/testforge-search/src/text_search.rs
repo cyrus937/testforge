@@ -63,8 +63,9 @@ impl TextIndex {
             Index::open_in_dir(dir)
                 .map_err(|e| TestForgeError::internal(format!("Failed to open text index: {e}")))?
         } else {
-            Index::create_in_dir(dir, schema.clone())
-                .map_err(|e| TestForgeError::internal(format!("Failed to create text index: {e}")))?
+            Index::create_in_dir(dir, schema.clone()).map_err(|e| {
+                TestForgeError::internal(format!("Failed to create text index: {e}"))
+            })?
         };
 
         let reader = index
@@ -141,9 +142,10 @@ impl TextIndex {
     ///
     /// The document is buffered in memory until [`commit()`] is called.
     pub fn add_symbol(&mut self, symbol: &Symbol) -> Result<()> {
-        let writer = self.writer.as_mut().ok_or_else(|| {
-            TestForgeError::internal("Text index writer not available")
-        })?;
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| TestForgeError::internal("Text index writer not available"))?;
 
         let symbol_json = serde_json::to_string(symbol)
             .map_err(|e| TestForgeError::internal(format!("Failed to serialize symbol: {e}")))?;
@@ -153,12 +155,12 @@ impl TextIndex {
         writer.delete_term(id_term);
 
         let mut doc = TantivyDocument::default();
-        doc.add_text(self.fields.id, &symbol.id.to_string());
+        doc.add_text(self.fields.id, symbol.id.to_string());
         doc.add_text(self.fields.name, &symbol.name);
         doc.add_text(self.fields.qualified_name, &symbol.qualified_name);
-        doc.add_text(self.fields.kind, &symbol.kind.to_string());
-        doc.add_text(self.fields.language, &symbol.language.to_string());
-        doc.add_text(self.fields.file_path, &symbol.file_path.to_string_lossy());
+        doc.add_text(self.fields.kind, symbol.kind.to_string());
+        doc.add_text(self.fields.language, symbol.language.to_string());
+        doc.add_text(self.fields.file_path, symbol.file_path.to_string_lossy());
 
         if let Some(ref sig) = symbol.signature {
             doc.add_text(self.fields.signature, sig);
@@ -169,7 +171,8 @@ impl TextIndex {
         doc.add_text(self.fields.source, &symbol.source);
         doc.add_text(self.fields.symbol_json, &symbol_json);
 
-        writer.add_document(doc)
+        writer
+            .add_document(doc)
             .map_err(|e| TestForgeError::internal(format!("Failed to add document: {e}")))?;
 
         Ok(())
@@ -178,9 +181,11 @@ impl TextIndex {
     /// Commit pending writes and make them searchable.
     pub fn commit(&mut self) -> Result<()> {
         if let Some(ref mut writer) = self.writer {
-            writer.commit()
+            writer
+                .commit()
                 .map_err(|e| TestForgeError::internal(format!("Commit failed: {e}")))?;
-            self.reader.reload()
+            self.reader
+                .reload()
                 .map_err(|e| TestForgeError::internal(format!("Reload failed: {e}")))?;
         }
         Ok(())
@@ -207,13 +212,7 @@ impl TextIndex {
         );
 
         // Build boosted query
-        let boosted_query = format!(
-            "{}",
-            query_str
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
+        let boosted_query = query_str.split_whitespace().collect::<Vec<_>>().join(" ");
 
         let query = query_parser.parse_query(&boosted_query).map_err(|e| {
             TestForgeError::internal(format!("Failed to parse query '{query_str}': {e}"))
@@ -226,9 +225,9 @@ impl TextIndex {
         let mut results = Vec::with_capacity(top_docs.len());
 
         for (score, doc_addr) in top_docs {
-            let doc: TantivyDocument = searcher.doc(doc_addr).map_err(|e| {
-                TestForgeError::internal(format!("Failed to retrieve doc: {e}"))
-            })?;
+            let doc: TantivyDocument = searcher
+                .doc(doc_addr)
+                .map_err(|e| TestForgeError::internal(format!("Failed to retrieve doc: {e}")))?;
 
             // Deserialize the stored symbol JSON
             if let Some(json_value) = doc.get_first(self.fields.symbol_json) {
@@ -269,11 +268,14 @@ impl TextIndex {
     /// Clear the entire text index.
     pub fn clear(&mut self) -> Result<()> {
         if let Some(ref mut writer) = self.writer {
-            writer.delete_all_documents()
+            writer
+                .delete_all_documents()
                 .map_err(|e| TestForgeError::internal(format!("Clear failed: {e}")))?;
-            writer.commit()
+            writer
+                .commit()
                 .map_err(|e| TestForgeError::internal(format!("Commit failed: {e}")))?;
-            self.reader.reload()
+            self.reader
+                .reload()
                 .map_err(|e| TestForgeError::internal(format!("Reload failed: {e}")))?;
         }
         Ok(())
@@ -294,8 +296,8 @@ fn normalize_bm25_score(raw: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use testforge_core::models::*;
     use tempfile::TempDir;
+    use testforge_core::models::*;
     use uuid::Uuid;
 
     fn make_test_symbol(name: &str, source: &str) -> Symbol {
@@ -365,10 +367,7 @@ mod tests {
         let mut index = TextIndex::open(dir.path()).unwrap();
 
         for i in 0..5 {
-            let sym = make_test_symbol(
-                &format!("func_{i}"),
-                &format!("def func_{i}(): pass"),
-            );
+            let sym = make_test_symbol(&format!("func_{i}"), &format!("def func_{i}(): pass"));
             index.add_symbol(&sym).unwrap();
         }
         index.commit().unwrap();
@@ -432,7 +431,7 @@ mod tests {
         index.commit().unwrap();
 
         let results = index.search("auth", 10).unwrap();
-        assert!(results.len() >= 1);
+        assert!(!results.is_empty());
         // Name match should rank first
         assert_eq!(results[0].symbol.name, "auth_handler");
     }
