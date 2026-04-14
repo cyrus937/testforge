@@ -55,7 +55,11 @@ pub fn run(args: IndexArgs) -> anyhow::Result<()> {
 
     // Print results
     println!();
-    println!("  {} Indexing complete in {:.1}s", "✓".green().bold(), elapsed.as_secs_f64());
+    println!(
+        "  {} Indexing complete in {:.1}s",
+        "✓".green().bold(),
+        elapsed.as_secs_f64()
+    );
     println!();
     println!(
         "  Files indexed:  {}",
@@ -140,9 +144,7 @@ pub fn run(args: IndexArgs) -> anyhow::Result<()> {
         watcher.watch_with_handler(move |event| {
             match event {
                 testforge_indexer::watcher::WatchEvent::FileChanged(path) => {
-                    let rel = path
-                        .strip_prefix(&project_root)
-                        .unwrap_or(&path);
+                    let rel = path.strip_prefix(&project_root).unwrap_or(&path);
                     println!(
                         "  {} {} changed — re-indexing...",
                         "↻".blue(),
@@ -154,12 +156,7 @@ pub fn run(args: IndexArgs) -> anyhow::Result<()> {
                     println!("  {} {} deleted", "✗".red(), path.display());
                 }
                 testforge_indexer::watcher::WatchEvent::FileRenamed(old, new) => {
-                    println!(
-                        "  {} {} → {}",
-                        "↻".blue(),
-                        old.display(),
-                        new.display()
-                    );
+                    println!("  {} {} → {}", "↻".blue(), old.display(), new.display());
                 }
             }
         })?;
