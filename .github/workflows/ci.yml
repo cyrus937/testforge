@@ -64,7 +64,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install ruff mypy pytest
+          pip install ruff mypy pytest numpy
           pip install -e ".[dev]" || true
 
       - name: Lint with ruff
