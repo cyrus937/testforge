@@ -36,6 +36,30 @@ Most AI test generators work **function-by-function** in isolation — they see 
 
 ---
 
+## Architecture
+
+TestForge is a **Rust + Python** hybrid:
+
+| Layer | Language | Responsibility |
+|-------|----------|----------------|
+| Core engine | Rust | AST parsing, indexing, search, CLI, API server |
+| AI layer | Python | Embeddings, LLM prompts, test generation |
+| Bridge | PyO3 | Zero-overhead Rust ↔ Python interop |
+
+See [docs/architecture.md](docs/architecture.md) for the full design.
+
+---
+
+## Documentation
+
+- [Getting Started](docs/getting-started.md) — Installation and first run
+- [Architecture](docs/architecture.md) — System design and data flows
+- [Configuration](docs/configuration.md) — All config options explained
+- [API Reference](docs/api-reference.md) — REST API endpoints
+- [Contributing](docs/contributing.md) — How to contribute
+
+---
+
 ## Quickstart
 
 ### Prerequisites
