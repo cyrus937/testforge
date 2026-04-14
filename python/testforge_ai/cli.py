@@ -62,8 +62,8 @@ def cmd_embed(args: argparse.Namespace) -> int:
 
 def cmd_search(args: argparse.Namespace) -> int:
     """Semantic search using query embeddings."""
-    from testforge_ai.embeddings.pipeline import EmbeddingPipeline, EmbeddingPipelineConfig
     from testforge_ai.bridge import TestForgeBridge
+    from testforge_ai.embeddings.pipeline import EmbeddingPipeline, EmbeddingPipelineConfig
 
     project_root = Path(args.project).resolve()
     query = args.query
@@ -90,7 +90,7 @@ def cmd_search(args: argparse.Namespace) -> int:
             try:
                 sym_vec = pipeline.embed_symbol(sym)
                 # Cosine similarity (vectors are normalized)
-                score = sum(a * b for a, b in zip(query_vec, sym_vec))
+                score = sum(a * b for a, b in zip(query_vec, sym_vec, strict=False))
                 scored.append((score, sym))
             except Exception:
                 continue
@@ -156,7 +156,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
         vec_size = vec_file.stat().st_size
         print(f"\n  Vector store:    {vec_size / 1024:.1f} KB")
     else:
-        print(f"\n  Vector store:    not built yet")
+        print("\n  Vector store:    not built yet")
 
     print()
     return 0

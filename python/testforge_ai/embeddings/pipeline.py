@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
-from testforge_ai.bridge import TestForgeBridge, SymbolInfo
+from testforge_ai.bridge import SymbolInfo, TestForgeBridge
 from testforge_ai.embeddings.cache import EmbeddingCache
 from testforge_ai.embeddings.local import LocalEmbeddingProvider
-from testforge_ai.embeddings.provider import EmbeddingProvider, EmbeddingResult
+from testforge_ai.embeddings.provider import EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +74,7 @@ class EmbeddingPipeline:
     def __init__(
         self,
         project_root: Path,
-        config: Optional[EmbeddingPipelineConfig] = None,
+        config: EmbeddingPipelineConfig | None = None,
     ):
         self.project_root = project_root.resolve()
         self.config = config or EmbeddingPipelineConfig()
@@ -122,7 +121,7 @@ class EmbeddingPipeline:
         chunks = [self._build_chunk(sym) for sym in symbols]
 
         # 3. Compute embeddings in batches
-        vectors: list[Optional[list[float]]] = [None] * len(symbols)
+        vectors: list[list[float] | None] = [None] * len(symbols)
         batch_size = self.config.batch_size
 
         for batch_start in range(0, len(chunks), batch_size):
@@ -136,7 +135,7 @@ class EmbeddingPipeline:
                 else:
                     results = self._provider.embed_texts(batch_texts)
 
-                for idx, result in zip(batch_indices, results):
+                for idx, result in zip(batch_indices, results, strict=False):
                     vectors[idx] = result.vector.tolist()
                     report.embedded += 1
 
@@ -227,7 +226,7 @@ class EmbeddingPipeline:
         lines = source.splitlines()
         if len(lines) > 30:
             # Keep first 15 + last 10 lines (signature + body end)
-            truncated_lines = lines[:15] + ["  # ..."] + lines[-10:]
+            truncated_lines = [*lines[:15], "  # ...", *lines[-10:]]
             source = "\n".join(truncated_lines)
 
         parts.append(source)
@@ -249,7 +248,7 @@ class EmbeddingPipeline:
     def _write_vectors(
         self,
         symbols: list[SymbolInfo],
-        vectors: list[Optional[list[float]]],
+        vectors: list[list[float] | None],
     ) -> None:
         """
         Write computed vectors to the binary vector store file.
@@ -266,7 +265,7 @@ class EmbeddingPipeline:
 
         # Filter to only symbols with valid vectors
         entries: list[tuple[str, list[float]]] = []
-        for sym, vec in zip(symbols, vectors):
+        for sym, vec in zip(symbols, vectors, strict=False):
             if vec is not None:
                 # Use content_hash as a stable ID proxy, or generate from name
                 # The Rust side uses UUID, so we need to parse/generate one
