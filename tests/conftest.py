@@ -1,8 +1,15 @@
 """Pytest configuration and shared fixtures."""
 
+import sys
 from pathlib import Path
 
 import pytest
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PYTHON_SRC = REPO_ROOT / "python"
+if str(PYTHON_SRC) not in sys.path:
+    sys.path.insert(0, str(PYTHON_SRC))
 
 
 def pytest_addoption(parser):
