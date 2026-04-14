@@ -166,19 +166,14 @@ pub struct Symbol {
 }
 
 /// Visibility level of a symbol.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Visibility {
+    #[default]
     Public,
     Private,
     Protected,
     Internal,
-}
-
-impl Default for Visibility {
-    fn default() -> Self {
-        Self::Public
-    }
 }
 
 impl Symbol {

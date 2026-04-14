@@ -27,7 +27,7 @@ pub fn extract_symbols(
             extract_javascript_symbols(source, root, file_path, language)
         }
         Language::Rust => extract_rust_symbols(source, root, file_path),
-        other => Ok(Vec::new()),
+        _ => Ok(Vec::new()),
     }
 }
 

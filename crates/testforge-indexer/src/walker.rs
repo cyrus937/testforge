@@ -112,8 +112,7 @@ impl<'a> FileWalker<'a> {
         let path_str = path.to_string_lossy();
         self.config.project.exclude.iter().any(|pattern| {
             // Simple glob-like matching
-            if pattern.starts_with('*') {
-                let suffix = &pattern[1..];
+            if let Some(suffix) = pattern.strip_prefix('*') {
                 path_str.ends_with(suffix)
             } else {
                 path_str.contains(pattern.as_str())

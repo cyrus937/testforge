@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Result, TestForgeError};
 
 /// Root configuration structure, mapping 1:1 to `.testforge/config.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
     pub project: ProjectConfig,
@@ -128,19 +128,6 @@ pub struct ServerConfig {
 }
 
 // ── Defaults ─────────────────────────────────────────────────────────
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            project: ProjectConfig::default(),
-            indexer: IndexerConfig::default(),
-            embeddings: EmbeddingsConfig::default(),
-            llm: LlmConfig::default(),
-            generation: GenerationConfig::default(),
-            server: ServerConfig::default(),
-        }
-    }
-}
 
 impl Default for ProjectConfig {
     fn default() -> Self {

@@ -10,7 +10,7 @@ use std::time::Duration;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use testforge_core::models::Language;
 use testforge_core::{Config, Result, TestForgeError};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// Events emitted by the file watcher.
 #[derive(Debug, Clone)]

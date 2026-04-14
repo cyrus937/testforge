@@ -1,7 +1,5 @@
 //! `testforge search` — search the codebase using natural language or keywords.
 
-use std::path::PathBuf;
-
 use clap::Args;
 use colored::Colorize;
 use testforge_core::Config;
