@@ -1,5 +1,6 @@
 //! CLI command definitions and dispatcher.
 
+pub mod gen_tests;
 pub mod index;
 pub mod init;
 pub mod search;
@@ -18,6 +19,9 @@ pub enum Command {
     /// Search the codebase using natural language
     Search(search::SearchArgs),
 
+    /// Generate tests for a function, method, or file
+    GenTests(gen_tests::GenTestsArgs),
+
     /// Show the current index status
     Status(status::StatusArgs),
 }
@@ -28,6 +32,7 @@ pub fn execute(cmd: Command) -> anyhow::Result<()> {
         Command::Init(args) => init::run(args),
         Command::Index(args) => index::run(args),
         Command::Search(args) => search::run(args),
+        Command::GenTests(args) => gen_tests::run(args),
         Command::Status(args) => status::run(args),
     }
 }
