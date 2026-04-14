@@ -31,7 +31,10 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
         project_root.display()
     );
     println!();
-    println!("  Files indexed:    {}", status.file_count.to_string().cyan());
+    println!(
+        "  Files indexed:    {}",
+        status.file_count.to_string().cyan()
+    );
     println!(
         "  Symbols extracted: {}",
         status.symbol_count.to_string().cyan()

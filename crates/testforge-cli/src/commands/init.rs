@@ -40,7 +40,11 @@ pub fn run(args: InitArgs) -> anyhow::Result<()> {
     }
 
     println!();
-    println!("  {} Created {}", "✓".green().bold(), ".testforge/config.toml");
+    println!(
+        "  {} Created {}",
+        "✓".green().bold(),
+        ".testforge/config.toml"
+    );
     println!("  {} Created {}", "✓".green().bold(), ".testforge/index/");
     println!("  {} Created {}", "✓".green().bold(), ".testforge/cache/");
     println!();

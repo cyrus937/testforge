@@ -96,7 +96,10 @@ pub fn run(args: SearchArgs) -> anyhow::Result<()> {
             "○".yellow(),
             args.query.bold()
         );
-        println!("  Try broader terms or run {} first.", "testforge index .".cyan());
+        println!(
+            "  Try broader terms or run {} first.",
+            "testforge index .".cyan()
+        );
         return Ok(());
     }
 

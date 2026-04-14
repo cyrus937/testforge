@@ -28,9 +28,9 @@ impl<'a> FileWalker<'a> {
     pub fn collect_files(&self) -> Result<Vec<PathBuf>> {
         let mut builder = WalkBuilder::new(self.root);
         builder
-            .hidden(true)       // skip dotfiles/dotdirs
-            .git_ignore(true)   // respect .gitignore
-            .git_global(true)   // respect global gitignore
+            .hidden(true) // skip dotfiles/dotdirs
+            .git_ignore(true) // respect .gitignore
+            .git_global(true) // respect global gitignore
             .git_exclude(true); // respect .git/info/exclude
 
         // Add configured exclude patterns as custom ignores
@@ -46,19 +46,21 @@ impl<'a> FileWalker<'a> {
                     .project
                     .languages
                     .iter()
-                    .filter_map(|l| Language::from_extension(l).or_else(|| {
-                        // Try matching language name directly
-                        match l.to_lowercase().as_str() {
-                            "python" => Some(Language::Python),
-                            "javascript" | "js" => Some(Language::JavaScript),
-                            "typescript" | "ts" => Some(Language::TypeScript),
-                            "rust" => Some(Language::Rust),
-                            "java" => Some(Language::Java),
-                            "go" => Some(Language::Go),
-                            "csharp" | "c#" => Some(Language::CSharp),
-                            _ => None,
-                        }
-                    }))
+                    .filter_map(|l| {
+                        Language::from_extension(l).or_else(|| {
+                            // Try matching language name directly
+                            match l.to_lowercase().as_str() {
+                                "python" => Some(Language::Python),
+                                "javascript" | "js" => Some(Language::JavaScript),
+                                "typescript" | "ts" => Some(Language::TypeScript),
+                                "rust" => Some(Language::Rust),
+                                "java" => Some(Language::Java),
+                                "go" => Some(Language::Go),
+                                "csharp" | "c#" => Some(Language::CSharp),
+                                _ => None,
+                            }
+                        })
+                    })
                     .collect(),
             )
         };

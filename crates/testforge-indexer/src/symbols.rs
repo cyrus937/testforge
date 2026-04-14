@@ -33,11 +33,7 @@ pub fn extract_symbols(
 
 // ── Python Extractor ─────────────────────────────────────────────────
 
-fn extract_python_symbols(
-    source: &str,
-    root: &Node,
-    file_path: &Path,
-) -> Result<Vec<Symbol>> {
+fn extract_python_symbols(source: &str, root: &Node, file_path: &Path) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
     let source_bytes = source.as_bytes();
 
@@ -142,11 +138,7 @@ fn extract_python_function(
     })
 }
 
-fn extract_python_class(
-    node: &Node,
-    source: &[u8],
-    file_path: &Path,
-) -> Option<Symbol> {
+fn extract_python_class(node: &Node, source: &[u8], file_path: &Path) -> Option<Symbol> {
     let name_node = node.child_by_field_name("name")?;
     let name = node_text(&name_node, source)?;
     let full_source = node_text(node, source)?;
@@ -429,11 +421,7 @@ fn extract_js_arrow_function(
 
 // ── Rust Extractor ───────────────────────────────────────────────────
 
-fn extract_rust_symbols(
-    source: &str,
-    root: &Node,
-    file_path: &Path,
-) -> Result<Vec<Symbol>> {
+fn extract_rust_symbols(source: &str, root: &Node, file_path: &Path) -> Result<Vec<Symbol>> {
     let mut symbols = Vec::new();
     let source_bytes = source.as_bytes();
 

@@ -100,7 +100,9 @@ impl TestForgeError {
     /// Returns a user-friendly suggestion for how to resolve this error.
     pub fn suggestion(&self) -> Option<&'static str> {
         match self {
-            Self::ConfigNotFound { .. } => Some("Run `testforge init` to create a configuration file."),
+            Self::ConfigNotFound { .. } => {
+                Some("Run `testforge init` to create a configuration file.")
+            }
             Self::IndexNotReady => Some("Run `testforge index .` to build the search index."),
             Self::UnsupportedLanguage { .. } => {
                 Some("Supported languages: python, javascript, typescript, rust, java, go.")

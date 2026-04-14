@@ -29,7 +29,7 @@ impl IndexStore {
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              PRAGMA foreign_keys = ON;
-             PRAGMA cache_size = -64000;",  // 64 MB cache
+             PRAGMA cache_size = -64000;", // 64 MB cache
         )?;
 
         let store = Self { conn };
@@ -295,11 +295,7 @@ impl IndexStore {
 
         let last_indexed: Option<String> = self
             .conn
-            .query_row(
-                "SELECT MAX(indexed_at) FROM files",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT MAX(indexed_at) FROM files", [], |r| r.get(0))
             .optional()?
             .flatten();
 
@@ -360,10 +356,8 @@ struct SymbolRow {
 impl SymbolRow {
     fn into_symbol(self) -> std::result::Result<Symbol, String> {
         let id = uuid::Uuid::parse_str(&self.id).map_err(|e| e.to_string())?;
-        let kind: SymbolKind =
-            serde_json::from_str(&self.kind).map_err(|e| e.to_string())?;
-        let language: Language =
-            serde_json::from_str(&self.language).map_err(|e| e.to_string())?;
+        let kind: SymbolKind = serde_json::from_str(&self.kind).map_err(|e| e.to_string())?;
+        let language: Language = serde_json::from_str(&self.language).map_err(|e| e.to_string())?;
         let dependencies: Vec<String> =
             serde_json::from_str(&self.dependencies).unwrap_or_default();
         let visibility: Visibility =
@@ -429,10 +423,7 @@ mod tests {
         };
         store.upsert_file(&file).unwrap();
 
-        let symbols = vec![
-            make_symbol("foo", "test.py"),
-            make_symbol("bar", "test.py"),
-        ];
+        let symbols = vec![make_symbol("foo", "test.py"), make_symbol("bar", "test.py")];
         store.upsert_symbols(&symbols).unwrap();
 
         let retrieved = store.all_symbols().unwrap();
@@ -475,8 +466,12 @@ mod tests {
         };
         store.upsert_file(&file).unwrap();
 
-        store.upsert_symbols(&[make_symbol("old_func", "test.py")]).unwrap();
-        store.upsert_symbols(&[make_symbol("new_func", "test.py")]).unwrap();
+        store
+            .upsert_symbols(&[make_symbol("old_func", "test.py")])
+            .unwrap();
+        store
+            .upsert_symbols(&[make_symbol("new_func", "test.py")])
+            .unwrap();
 
         let all = store.all_symbols().unwrap();
         assert_eq!(all.len(), 1);
@@ -497,10 +492,7 @@ mod tests {
         };
         store.upsert_file(&file).unwrap();
         store
-            .upsert_symbols(&[
-                make_symbol("f1", "a.py"),
-                make_symbol("f2", "a.py"),
-            ])
+            .upsert_symbols(&[make_symbol("f1", "a.py"), make_symbol("f2", "a.py")])
             .unwrap();
 
         let status = store.status().unwrap();

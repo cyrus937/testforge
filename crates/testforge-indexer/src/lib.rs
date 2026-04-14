@@ -21,8 +21,8 @@ pub mod watcher;
 
 use std::path::Path;
 
-use testforge_core::{Config, Result, TestForgeError};
 use testforge_core::models::{IndexStatus, IndexedFile, Language, Symbol};
+use testforge_core::{Config, Result, TestForgeError};
 use tracing::{info, warn};
 
 pub use parser::Parser;
@@ -123,10 +123,7 @@ impl Indexer {
             .to_path_buf();
 
         // Detect language
-        let extension = abs_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let extension = abs_path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
         let language = Language::from_extension(extension).ok_or_else(|| {
             TestForgeError::UnsupportedLanguage {
@@ -160,7 +157,9 @@ impl Indexer {
         }
 
         // Parse and extract symbols
-        let symbols = self.parser.parse_and_extract(&source, language, &rel_path)?;
+        let symbols = self
+            .parser
+            .parse_and_extract(&source, language, &rel_path)?;
         let symbol_count = symbols.len();
 
         // Store results

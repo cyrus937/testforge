@@ -43,8 +43,8 @@ impl FileWatcher {
         let root = self.root.clone();
         let config = self.config.clone();
 
-        let mut watcher = notify::recommended_watcher(
-            move |res: std::result::Result<Event, notify::Error>| {
+        let mut watcher =
+            notify::recommended_watcher(move |res: std::result::Result<Event, notify::Error>| {
                 match res {
                     Ok(event) => {
                         if let Some(watch_event) = classify_event(&event, &root, &config) {
@@ -57,9 +57,8 @@ impl FileWatcher {
                         error!(error = %e, "File watcher error");
                     }
                 }
-            },
-        )
-        .map_err(|e| TestForgeError::internal(format!("Failed to create watcher: {e}")))?;
+            })
+            .map_err(|e| TestForgeError::internal(format!("Failed to create watcher: {e}")))?;
 
         watcher
             .watch(&self.root, RecursiveMode::Recursive)
@@ -135,9 +134,7 @@ fn classify_event(event: &Event, root: &Path, config: &Config) -> Option<WatchEv
     }
 
     match event.kind {
-        EventKind::Create(_) | EventKind::Modify(_) => {
-            Some(WatchEvent::FileChanged(path.clone()))
-        }
+        EventKind::Create(_) | EventKind::Modify(_) => Some(WatchEvent::FileChanged(path.clone())),
         EventKind::Remove(_) => Some(WatchEvent::FileDeleted(path.clone())),
         _ => None,
     }

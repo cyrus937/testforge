@@ -48,10 +48,9 @@ impl Parser {
             TestForgeError::internal(format!("Failed to set language {language}: {e}"))
         })?;
 
-        let tree = self
-            .inner
-            .parse(source, None)
-            .ok_or_else(|| TestForgeError::parse_error(file_path, "tree-sitter parse returned None"))?;
+        let tree = self.inner.parse(source, None).ok_or_else(|| {
+            TestForgeError::parse_error(file_path, "tree-sitter parse returned None")
+        })?;
 
         let root = tree.root_node();
 
@@ -76,11 +75,7 @@ impl Parser {
     }
 
     /// Parse source code and return the raw AST (for debugging / inspection).
-    pub fn parse_to_tree(
-        &mut self,
-        source: &str,
-        language: Language,
-    ) -> Result<tree_sitter::Tree> {
+    pub fn parse_to_tree(&mut self, source: &str, language: Language) -> Result<tree_sitter::Tree> {
         let grammar = languages::grammar_for(language).ok_or_else(|| {
             TestForgeError::UnsupportedLanguage {
                 language: language.to_string(),
