@@ -8,6 +8,7 @@ use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use testforge_core::Config;
 use testforge_indexer::Indexer;
+use testforge_search::SearchEngine;
 
 #[derive(Args)]
 pub struct IndexArgs {
@@ -54,11 +55,7 @@ pub fn run(args: IndexArgs) -> anyhow::Result<()> {
 
     // Print results
     println!();
-    println!(
-        "  {} Indexing complete in {:.1}s",
-        "✓".green().bold(),
-        elapsed.as_secs_f64()
-    );
+    println!("  {} Indexing complete in {:.1}s", "✓".green().bold(), elapsed.as_secs_f64());
     println!();
     println!(
         "  Files indexed:  {}",
@@ -84,6 +81,50 @@ pub fn run(args: IndexArgs) -> anyhow::Result<()> {
         }
     }
 
+    // Phase 2: Build the full-text search index from the SQLite store
+    if report.symbols_extracted > 0 || args.clean {
+        let search_dir = project_root
+            .join(testforge_core::config::CONFIG_DIR)
+            .join("search");
+
+        let pb2 = ProgressBar::new_spinner();
+        pb2.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.cyan} {msg}")
+                .unwrap(),
+        );
+        pb2.set_message("Building search index...");
+        pb2.enable_steady_tick(std::time::Duration::from_millis(100));
+
+        let (config2, _) = Config::discover(&args.path)?;
+        let mut search_engine = SearchEngine::open(&search_dir, &config2)?;
+
+        if args.clean {
+            search_engine.clear()?;
+        }
+
+        // Feed all symbols into the text index
+        let all_symbols = indexer.all_symbols()?;
+        let no_embeddings: Vec<Option<Vec<f32>>> = vec![None; all_symbols.len()];
+        search_engine.index_symbols(&all_symbols, &no_embeddings)?;
+        search_engine.commit()?;
+
+        pb2.finish_and_clear();
+
+        let text_docs = search_engine.text_doc_count().unwrap_or(0);
+        let vec_count = search_engine.vector_count();
+
+        println!(
+            "  Search index:   {} text docs, {} vectors",
+            text_docs.to_string().cyan(),
+            if vec_count > 0 {
+                vec_count.to_string().green()
+            } else {
+                "0 (run testforge embed to compute)".yellow()
+            }
+        );
+    }
+
     if args.watch {
         println!();
         println!(
@@ -99,7 +140,9 @@ pub fn run(args: IndexArgs) -> anyhow::Result<()> {
         watcher.watch_with_handler(move |event| {
             match event {
                 testforge_indexer::watcher::WatchEvent::FileChanged(path) => {
-                    let rel = path.strip_prefix(&project_root).unwrap_or(&path);
+                    let rel = path
+                        .strip_prefix(&project_root)
+                        .unwrap_or(&path);
                     println!(
                         "  {} {} changed — re-indexing...",
                         "↻".blue(),
@@ -111,7 +154,12 @@ pub fn run(args: IndexArgs) -> anyhow::Result<()> {
                     println!("  {} {} deleted", "✗".red(), path.display());
                 }
                 testforge_indexer::watcher::WatchEvent::FileRenamed(old, new) => {
-                    println!("  {} {} → {}", "↻".blue(), old.display(), new.display());
+                    println!(
+                        "  {} {} → {}",
+                        "↻".blue(),
+                        old.display(),
+                        new.display()
+                    );
                 }
             }
         })?;

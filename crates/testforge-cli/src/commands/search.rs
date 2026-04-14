@@ -1,9 +1,13 @@
 //! `testforge search` — search the codebase using natural language or keywords.
+//!
+//! Uses the hybrid search engine (tantivy full-text + vector cosine similarity)
+//! when embeddings are available, gracefully falling back to full-text only.
 
 use clap::Args;
 use colored::Colorize;
+use testforge_core::models::Language;
 use testforge_core::Config;
-use testforge_indexer::Indexer;
+use testforge_search::{ranking, SearchEngine, SearchQuery};
 
 #[derive(Args)]
 pub struct SearchArgs {
@@ -22,73 +26,121 @@ pub struct SearchArgs {
     #[arg(short, long)]
     kind: Option<String>,
 
+    /// Filter by file path prefix
+    #[arg(short, long)]
+    path: Option<String>,
+
+    /// Semantic weight: 0.0 = text only, 1.0 = semantic only (default 0.6)
+    #[arg(short, long, default_value = "0.6")]
+    semantic_weight: f32,
+
     /// Output format: "pretty" (default) or "json"
     #[arg(short, long, default_value = "pretty")]
     format: String,
+
+    /// Show ranking explanation for each result
+    #[arg(long)]
+    explain: bool,
 }
 
 pub fn run(args: SearchArgs) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     let (config, project_root) = Config::discover(&cwd)?;
-    let indexer = Indexer::new(config, &project_root)?;
 
-    // Phase 1: keyword-based search against the SQLite index.
-    // Phase 2+ will add semantic (vector) search via the Python bridge.
-    let results = indexer.all_symbols()?;
+    let search_dir = project_root
+        .join(testforge_core::config::CONFIG_DIR)
+        .join("search");
 
-    let query_lower = args.query.to_lowercase();
+    // Build search query
+    let mut query = SearchQuery::new(&args.query)
+        .with_limit(args.limit)
+        .with_semantic_weight(args.semantic_weight);
 
-    let mut filtered: Vec<_> = results
-        .into_iter()
-        .filter(|sym| {
-            // Text matching across name, qualified_name, docstring, source
-            let name_match = sym.name.to_lowercase().contains(&query_lower)
-                || sym.qualified_name.to_lowercase().contains(&query_lower);
-            let doc_match = sym
-                .docstring
-                .as_ref()
-                .map(|d| d.to_lowercase().contains(&query_lower))
-                .unwrap_or(false);
-            let source_match = sym.source.to_lowercase().contains(&query_lower);
+    if let Some(ref lang) = args.language {
+        if let Some(l) = parse_language(lang) {
+            query = query.with_language(l);
+        }
+    }
 
-            name_match || doc_match || source_match
-        })
-        .filter(|sym| {
-            // Optional language filter
-            if let Some(ref lang) = args.language {
-                sym.language.to_string() == lang.to_lowercase()
-            } else {
-                true
-            }
-        })
-        .filter(|sym| {
-            // Optional kind filter
-            if let Some(ref kind) = args.kind {
-                sym.kind.to_string() == kind.to_lowercase()
-            } else {
-                true
-            }
-        })
-        .collect();
+    if let Some(ref kind) = args.kind {
+        query = query.with_kind(kind.to_lowercase());
+    }
 
-    // Score: prefer name matches over source matches
-    filtered.sort_by(|a, b| {
-        let score_a = search_score(a, &query_lower);
-        let score_b = search_score(b, &query_lower);
-        score_b
-            .partial_cmp(&score_a)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if let Some(ref path) = args.path {
+        query = query.with_path_prefix(path.clone());
+    }
 
-    filtered.truncate(args.limit);
+    // Try the search engine first (tantivy + vectors)
+    let mut results = if search_dir.join("tantivy").exists() {
+        let engine = SearchEngine::open(&search_dir, &config)?;
 
+        // TODO: compute query embedding via Python bridge and pass it here
+        // For now, text-only search
+        let mut res = engine.search(&query, None)?;
+
+        // Apply re-ranking pipeline
+        ranking::rerank(&mut res);
+        ranking::deduplicate(&mut res);
+        ranking::diversify(&mut res, 5);
+        res.truncate(args.limit);
+        res
+    } else {
+        Vec::new()
+    };
+
+    // Fallback to SQLite index if the search engine is empty
+    if results.is_empty() {
+        let indexer = testforge_indexer::Indexer::new(config.clone(), &project_root)?;
+        let all_symbols = indexer.all_symbols()?;
+
+        let query_lower = args.query.to_lowercase();
+        let mut fallback: Vec<_> = all_symbols
+            .into_iter()
+            .filter(|sym| {
+                sym.name.to_lowercase().contains(&query_lower)
+                    || sym.qualified_name.to_lowercase().contains(&query_lower)
+                    || sym
+                        .docstring
+                        .as_ref()
+                        .map(|d| d.to_lowercase().contains(&query_lower))
+                        .unwrap_or(false)
+                    || sym.source.to_lowercase().contains(&query_lower)
+            })
+            .filter(|sym| {
+                if let Some(ref lang) = args.language {
+                    sym.language.to_string() == lang.to_lowercase()
+                } else {
+                    true
+                }
+            })
+            .filter(|sym| {
+                if let Some(ref kind) = args.kind {
+                    sym.kind.to_string() == kind.to_lowercase()
+                } else {
+                    true
+                }
+            })
+            .map(|sym| testforge_core::models::SearchResult {
+                symbol: sym,
+                score: 0.5,
+                match_source: testforge_core::models::MatchSource::FullText,
+            })
+            .collect();
+
+        ranking::rerank(&mut fallback);
+        fallback.truncate(args.limit);
+        results = fallback;
+    }
+
+    // Output
     if args.format == "json" {
-        println!("{}", serde_json::to_string_pretty(&filtered)?);
+        // For JSON output, serialize just the symbols (backward compatible)
+        let symbols: Vec<_> = results.iter().map(|r| &r.symbol).collect();
+        println!("{}", serde_json::to_string_pretty(&symbols)?);
         return Ok(());
     }
 
-    // Pretty print
-    if filtered.is_empty() {
+    if results.is_empty() {
         println!(
             "  {} No results for \"{}\"",
             "○".yellow(),
@@ -103,24 +155,29 @@ pub fn run(args: SearchArgs) -> anyhow::Result<()> {
 
     println!(
         "\n  Found {} results for \"{}\"\n",
-        filtered.len().to_string().cyan(),
+        results.len().to_string().cyan(),
         args.query.bold()
     );
 
-    for (i, sym) in filtered.iter().enumerate() {
-        let kind_badge = format!(" {} ", sym.kind).on_blue().white().bold();
-        let vis = match sym.visibility {
-            testforge_core::models::Visibility::Private => " private".dimmed().to_string(),
-            testforge_core::models::Visibility::Protected => " protected".dimmed().to_string(),
-            _ => String::new(),
+    for (i, result) in results.iter().enumerate() {
+        let sym = &result.symbol;
+
+        let source_badge = match result.match_source {
+            testforge_core::models::MatchSource::Semantic => " semantic ".on_magenta().white(),
+            testforge_core::models::MatchSource::FullText => " text ".on_blue().white(),
+            testforge_core::models::MatchSource::Hybrid => " hybrid ".on_green().white(),
         };
 
+        let kind_badge = format!(" {} ", sym.kind).on_bright_black().white().bold();
+        let score_str = format!("{:.3}", result.score).dimmed();
+
         println!(
-            "  {} {}{} {}",
+            "  {} {} {} {}  {}",
             format!("{:>2}.", i + 1).dimmed(),
             kind_badge,
-            vis,
-            sym.qualified_name.bold()
+            source_badge,
+            sym.qualified_name.bold(),
+            score_str,
         );
 
         println!(
@@ -149,51 +206,25 @@ pub fn run(args: SearchArgs) -> anyhow::Result<()> {
             println!("     {}", truncated.italic().dimmed());
         }
 
+        if args.explain {
+            let explanation = ranking::explain_ranking(result, &args.query);
+            println!("     {} {}", "?".yellow(), explanation.dimmed());
+        }
+
         println!();
     }
 
     Ok(())
 }
 
-/// Simple relevance scoring for keyword search.
-fn search_score(sym: &testforge_core::models::Symbol, query: &str) -> f64 {
-    let mut score = 0.0;
-
-    // Exact name match
-    if sym.name.to_lowercase() == query {
-        score += 10.0;
-    }
-    // Name starts with query
-    else if sym.name.to_lowercase().starts_with(query) {
-        score += 7.0;
-    }
-    // Name contains query
-    else if sym.name.to_lowercase().contains(query) {
-        score += 5.0;
-    }
-
-    // Qualified name match
-    if sym.qualified_name.to_lowercase().contains(query) {
-        score += 3.0;
-    }
-
-    // Docstring match
-    if sym
-        .docstring
-        .as_ref()
-        .map(|d| d.to_lowercase().contains(query))
-        .unwrap_or(false)
-    {
-        score += 2.0;
-    }
-
-    // Prefer public symbols
-    if sym.visibility == testforge_core::models::Visibility::Public {
-        score += 0.5;
-    }
-
-    // Prefer shorter symbols (more focused)
-    score += 1.0 / (sym.line_count() as f64).max(1.0);
-
-    score
+fn parse_language(s: &str) -> Option<Language> {
+    Language::from_extension(s).or_else(|| match s.to_lowercase().as_str() {
+        "python" => Some(Language::Python),
+        "javascript" | "js" => Some(Language::JavaScript),
+        "typescript" | "ts" => Some(Language::TypeScript),
+        "rust" => Some(Language::Rust),
+        "java" => Some(Language::Java),
+        "go" => Some(Language::Go),
+        _ => None,
+    })
 }
