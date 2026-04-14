@@ -1,53 +1,67 @@
-//! Shared domain models used across all TestForge crates.
+//! Domain types shared across all TestForge components.
 //!
-//! These structs form the canonical representation of indexed code —
-//! every crate agrees on what a "symbol" or a "search result" looks like.
+//! These structures form the common vocabulary of the system:
+//! the indexer produces [`Symbol`]s, the search engine returns [`SearchResult`]s,
+//! and the generator consumes [`CodeContext`] to produce tests.
 
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-// ─── Language Support ───────────────────────────────────────────────
+// ── Language ─────────────────────────────────────────────────────────
 
-/// Programming languages TestForge can parse and understand.
+/// Programming languages supported by the indexer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
     Python,
-    Rust,
     JavaScript,
     TypeScript,
+    Rust,
     Java,
     Go,
     CSharp,
 }
 
 impl Language {
-    /// File extensions associated with this language.
-    pub fn extensions(self) -> &'static [&'static str] {
+    /// Detect language from a file extension.
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_lowercase().as_str() {
+            "py" => Some(Self::Python),
+            "js" | "jsx" => Some(Self::JavaScript),
+            "ts" | "tsx" => Some(Self::TypeScript),
+            "rs" => Some(Self::Rust),
+            "java" => Some(Self::Java),
+            "go" => Some(Self::Go),
+            "cs" => Some(Self::CSharp),
+            _ => None,
+        }
+    }
+
+    /// Return canonical file extensions for this language.
+    pub fn extensions(&self) -> &'static [&'static str] {
         match self {
-            Self::Python => &["py", "pyi"],
-            Self::Rust => &["rs"],
-            Self::JavaScript => &["js", "jsx", "mjs", "cjs"],
+            Self::Python => &["py"],
+            Self::JavaScript => &["js", "jsx"],
             Self::TypeScript => &["ts", "tsx"],
+            Self::Rust => &["rs"],
             Self::Java => &["java"],
             Self::Go => &["go"],
             Self::CSharp => &["cs"],
         }
     }
 
-    /// Attempt to detect the language from a file extension.
-    pub fn from_extension(ext: &str) -> Option<Self> {
-        match ext {
-            "py" | "pyi" => Some(Self::Python),
-            "rs" => Some(Self::Rust),
-            "js" | "jsx" | "mjs" | "cjs" => Some(Self::JavaScript),
-            "ts" | "tsx" => Some(Self::TypeScript),
-            "java" => Some(Self::Java),
-            "go" => Some(Self::Go),
-            "cs" => Some(Self::CSharp),
-            _ => None,
+    /// Returns the default test framework for this language.
+    pub fn default_test_framework(&self) -> &'static str {
+        match self {
+            Self::Python => "pytest",
+            Self::JavaScript | Self::TypeScript => "jest",
+            Self::Rust => "cargo-test",
+            Self::Java => "junit",
+            Self::Go => "go-test",
+            Self::CSharp => "xunit",
         }
     }
 }
@@ -56,9 +70,9 @@ impl std::fmt::Display for Language {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Python => write!(f, "python"),
-            Self::Rust => write!(f, "rust"),
             Self::JavaScript => write!(f, "javascript"),
             Self::TypeScript => write!(f, "typescript"),
+            Self::Rust => write!(f, "rust"),
             Self::Java => write!(f, "java"),
             Self::Go => write!(f, "go"),
             Self::CSharp => write!(f, "csharp"),
@@ -66,9 +80,9 @@ impl std::fmt::Display for Language {
     }
 }
 
-// ─── Symbol Types ───────────────────────────────────────────────────
+// ── Symbol ───────────────────────────────────────────────────────────
 
-/// The kind of code symbol extracted during indexing.
+/// The kind of code symbol extracted from the AST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SymbolKind {
@@ -80,85 +94,115 @@ pub enum SymbolKind {
     Interface,
     Trait,
     Module,
-    Variable,
     Constant,
-    Import,
 }
 
 impl std::fmt::Display for SymbolKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let label = match self {
-            Self::Function => "fn",
-            Self::Method => "method",
-            Self::Class => "class",
-            Self::Struct => "struct",
-            Self::Enum => "enum",
-            Self::Interface => "interface",
-            Self::Trait => "trait",
-            Self::Module => "module",
-            Self::Variable => "var",
-            Self::Constant => "const",
-            Self::Import => "import",
-        };
-        write!(f, "{label}")
+        match self {
+            Self::Function => write!(f, "function"),
+            Self::Method => write!(f, "method"),
+            Self::Class => write!(f, "class"),
+            Self::Struct => write!(f, "struct"),
+            Self::Enum => write!(f, "enum"),
+            Self::Interface => write!(f, "interface"),
+            Self::Trait => write!(f, "trait"),
+            Self::Module => write!(f, "module"),
+            Self::Constant => write!(f, "constant"),
+        }
     }
 }
 
-// ─── Code Symbol ────────────────────────────────────────────────────
-
-/// A single symbol extracted from a source file.
+/// A code symbol extracted from parsing a source file.
 ///
-/// This is the fundamental unit TestForge indexes.  Every function,
-/// class, method, etc. becomes one `CodeSymbol`.
+/// Symbols are the fundamental indexing unit. Each represents a discrete
+/// named entity in the codebase (function, class, method, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodeSymbol {
-    /// Fully-qualified name (e.g. `auth.permissions.check_access`).
+pub struct Symbol {
+    /// Unique identifier for this symbol.
+    pub id: Uuid,
+
+    /// Human-readable name (e.g., `"authenticate_user"`).
     pub name: String,
 
-    /// The kind of symbol.
+    /// Fully qualified name including parent scope (e.g., `"AuthService.authenticate_user"`).
+    pub qualified_name: String,
+
+    /// What kind of symbol this is.
     pub kind: SymbolKind,
 
     /// Language the symbol is written in.
     pub language: Language,
 
-    /// Path to the source file (relative to project root).
+    /// File path relative to the project root.
     pub file_path: PathBuf,
 
-    /// Inclusive line range `[start, end]` (1-based).
-    pub line_start: usize,
-    pub line_end: usize,
+    /// 1-based starting line number.
+    pub start_line: usize,
 
-    /// The raw source code of the symbol body.
-    pub body: String,
+    /// 1-based ending line number (inclusive).
+    pub end_line: usize,
 
-    /// Signature / declaration line (without body).
-    pub signature: String,
+    /// The raw source code of this symbol.
+    pub source: String,
 
-    /// Docstring or leading comment, if present.
-    pub doc: Option<String>,
+    /// Extracted signature (e.g., `"def authenticate_user(self, username: str, password: str) -> bool"`).
+    pub signature: Option<String>,
 
-    /// Fully-qualified names this symbol depends on (calls / imports).
+    /// Docstring or documentation comment, if present.
+    pub docstring: Option<String>,
+
+    /// Symbols that this symbol depends on (names of called functions, used types).
     pub dependencies: Vec<String>,
 
-    /// Unique identifier (derived from path + name + line).
-    pub id: String,
+    /// Parent symbol name (e.g., class name for methods).
+    pub parent: Option<String>,
+
+    /// Visibility / access modifier.
+    pub visibility: Visibility,
+
+    /// SHA-256 hash of the source for change detection.
+    pub content_hash: String,
 }
 
-impl CodeSymbol {
-    /// Build a deterministic ID for this symbol.
-    pub fn compute_id(file_path: &PathBuf, name: &str, line_start: usize) -> String {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        file_path.hash(&mut hasher);
-        name.hash(&mut hasher);
-        line_start.hash(&mut hasher);
-        format!("sym_{:016x}", hasher.finish())
+/// Visibility level of a symbol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Visibility {
+    Public,
+    Private,
+    Protected,
+    Internal,
+}
+
+impl Default for Visibility {
+    fn default() -> Self {
+        Self::Public
     }
 }
 
-// ─── Indexed File Metadata ──────────────────────────────────────────
+impl Symbol {
+    /// Number of lines in this symbol's source.
+    pub fn line_count(&self) -> usize {
+        self.end_line.saturating_sub(self.start_line) + 1
+    }
 
-/// Metadata about a file that has been indexed.
+    /// Produce a concise one-line summary for CLI display.
+    pub fn display_summary(&self) -> String {
+        format!(
+            "{} {} ({}:{}-{})",
+            self.kind,
+            self.qualified_name,
+            self.file_path.display(),
+            self.start_line,
+            self.end_line,
+        )
+    }
+}
+
+// ── Indexed File ─────────────────────────────────────────────────────
+
+/// Metadata about an indexed source file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexedFile {
     /// Path relative to project root.
@@ -167,46 +211,151 @@ pub struct IndexedFile {
     /// Detected language.
     pub language: Language,
 
-    /// SHA-256 hash of the file contents at index time.
+    /// SHA-256 of file contents (for incremental re-indexing).
     pub content_hash: String,
 
-    /// Number of symbols extracted.
+    /// Number of symbols extracted from this file.
     pub symbol_count: usize,
 
-    /// When this file was last indexed.
+    /// Total lines of code.
+    pub line_count: usize,
+
+    /// Timestamp of last indexing.
     pub indexed_at: DateTime<Utc>,
 }
 
-// ─── Search ─────────────────────────────────────────────────────────
+// ── Search ───────────────────────────────────────────────────────────
 
-/// A single search result returned to the caller.
+/// A single result from a semantic or hybrid search query.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     /// The matched symbol.
-    pub symbol: CodeSymbol,
+    pub symbol: Symbol,
 
     /// Relevance score in `[0.0, 1.0]`.
     pub score: f64,
 
-    /// Short explanation of *why* this result matched.
-    pub match_reason: Option<String>,
+    /// Which search method produced this result.
+    pub match_source: MatchSource,
 }
 
-// ─── Index Statistics ───────────────────────────────────────────────
+/// How a search result was found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchSource {
+    /// Matched via vector similarity (semantic).
+    Semantic,
+    /// Matched via full-text keyword search.
+    FullText,
+    /// Fused result from both methods.
+    Hybrid,
+}
 
-/// Summary statistics for the current index state.
+// ── Code Context (for test generation) ───────────────────────────────
+
+/// Rich context bundle sent to the LLM for test generation.
+///
+/// This is the key differentiator: instead of sending just the function
+/// source, we send the full dependency graph, related tests, and project
+/// conventions so the LLM can generate contextually appropriate tests.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexStats {
-    pub total_files: usize,
-    pub total_symbols: usize,
-    pub languages: Vec<LanguageStat>,
+pub struct CodeContext {
+    /// The primary symbol to generate tests for.
+    pub target: Symbol,
+
+    /// Direct dependencies (functions called, types used).
+    pub dependencies: Vec<Symbol>,
+
+    /// Existing tests in the project that test similar functionality.
+    pub related_tests: Vec<Symbol>,
+
+    /// Other symbols in the same file/module for context.
+    pub siblings: Vec<Symbol>,
+
+    /// Import statements from the target file.
+    pub imports: Vec<String>,
+
+    /// Project-level conventions detected (naming patterns, test structure).
+    pub conventions: ProjectConventions,
+}
+
+/// Detected conventions in the project's existing test suite.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProjectConventions {
+    /// Common test file naming pattern (e.g., `"test_{name}.py"`).
+    pub test_file_pattern: Option<String>,
+
+    /// Common assertion style (e.g., `"assert"`, `"expect"`).
+    pub assertion_style: Option<String>,
+
+    /// Whether fixtures/factories are used.
+    pub uses_fixtures: bool,
+
+    /// Common mock library (e.g., `"unittest.mock"`, `"jest.fn"`).
+    pub mock_library: Option<String>,
+}
+
+// ── Index Status ─────────────────────────────────────────────────────
+
+/// Summary of the current index state (for `testforge status`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexStatus {
+    /// Total number of indexed files.
+    pub file_count: usize,
+
+    /// Total number of extracted symbols.
+    pub symbol_count: usize,
+
+    /// Total number of embeddings computed.
+    pub embedding_count: usize,
+
+    /// Languages present in the index.
+    pub languages: Vec<Language>,
+
+    /// Timestamp of last full index build.
     pub last_indexed: Option<DateTime<Utc>>,
-    pub index_duration_ms: u64,
+
+    /// Whether the file watcher is running.
+    pub watcher_active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LanguageStat {
-    pub language: Language,
-    pub files: usize,
-    pub symbols: usize,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn language_from_extension() {
+        assert_eq!(Language::from_extension("py"), Some(Language::Python));
+        assert_eq!(Language::from_extension("rs"), Some(Language::Rust));
+        assert_eq!(Language::from_extension("tsx"), Some(Language::TypeScript));
+        assert_eq!(Language::from_extension("unknown"), None);
+    }
+
+    #[test]
+    fn language_display() {
+        assert_eq!(Language::Python.to_string(), "python");
+        assert_eq!(Language::Rust.to_string(), "rust");
+    }
+
+    #[test]
+    fn symbol_line_count() {
+        let symbol = Symbol {
+            id: Uuid::new_v4(),
+            name: "test".into(),
+            qualified_name: "test".into(),
+            kind: SymbolKind::Function,
+            language: Language::Python,
+            file_path: "test.py".into(),
+            start_line: 10,
+            end_line: 25,
+            source: String::new(),
+            signature: None,
+            docstring: None,
+            dependencies: vec![],
+            parent: None,
+            visibility: Visibility::Public,
+            content_hash: String::new(),
+        };
+        assert_eq!(symbol.line_count(), 16);
+    }
 }

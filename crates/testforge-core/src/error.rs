@@ -1,65 +1,139 @@
-//! Unified error types for the TestForge ecosystem.
+//! Unified error types for TestForge.
 //!
-//! All crates in the workspace surface errors through [`TestForgeError`],
-//! keeping the public API consistent and making it easy for callers to
-//! pattern-match on failure modes.
+//! All crates in the workspace funnel their errors through [`TestForgeError`],
+//! which provides rich context for CLI display and API error responses.
 
 use std::path::PathBuf;
-use thiserror::Error;
 
-/// Top-level error type returned by every public function in TestForge.
-#[derive(Debug, Error)]
+/// Convenience type alias used throughout the project.
+pub type Result<T> = std::result::Result<T, TestForgeError>;
+
+/// Top-level error type for all TestForge operations.
+///
+/// Each variant carries enough context to produce a helpful error message
+/// without requiring the caller to attach additional information.
+#[derive(Debug, thiserror::Error)]
 pub enum TestForgeError {
-    // ── Configuration ───────────────────────────────────────────────
-    #[error("configuration file not found: {path}")]
+    // ── Configuration ────────────────────────────────────────────────
+    #[error("Configuration file not found at {path}")]
     ConfigNotFound { path: PathBuf },
 
-    #[error("invalid configuration: {message}")]
+    #[error("Invalid configuration: {message}")]
     ConfigInvalid { message: String },
 
-    #[error("failed to parse configuration: {source}")]
+    #[error("Failed to parse configuration: {source}")]
     ConfigParse {
         #[from]
         source: toml::de::Error,
     },
 
-    // ── Indexing ────────────────────────────────────────────────────
-    #[error("unsupported language: {language}")]
+    // ── Indexing ─────────────────────────────────────────────────────
+    #[error("Unsupported language: {language}")]
     UnsupportedLanguage { language: String },
 
-    #[error("failed to parse file {path}: {reason}")]
+    #[error("Failed to parse file {path}: {reason}")]
     ParseError { path: PathBuf, reason: String },
 
-    #[error("indexing failed for {path}: {reason}")]
-    IndexingError { path: PathBuf, reason: String },
+    #[error("File not found: {path}")]
+    FileNotFound { path: PathBuf },
 
-    // ── Search ──────────────────────────────────────────────────────
-    #[error("index not initialised – run `testforge index` first")]
+    #[error("File too large ({size_kb} KB > {max_kb} KB limit): {path}")]
+    FileTooLarge {
+        path: PathBuf,
+        size_kb: u64,
+        max_kb: u64,
+    },
+
+    // ── Search ───────────────────────────────────────────────────────
+    #[error("Index not initialized. Run `testforge index` first.")]
     IndexNotReady,
 
-    #[error("embedding generation failed: {reason}")]
-    EmbeddingError { reason: String },
+    #[error("Search query cannot be empty")]
+    EmptyQuery,
 
-    #[error("search failed: {reason}")]
-    SearchError { reason: String },
+    // ── AI / Embeddings ──────────────────────────────────────────────
+    #[error("Embedding provider error: {message}")]
+    EmbeddingError { message: String },
 
-    // ── Generation ──────────────────────────────────────────────────
-    #[error("test generation failed for {target}: {reason}")]
-    GenerationError { target: String, reason: String },
+    #[error("LLM provider error: {message}")]
+    LlmError { message: String },
 
-    #[error("LLM provider error: {reason}")]
-    LlmError { reason: String },
+    // ── Database ─────────────────────────────────────────────────────
+    #[error("Database error: {source}")]
+    Database {
+        #[from]
+        source: rusqlite::Error,
+    },
 
-    // ── I/O & Infra ─────────────────────────────────────────────────
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    // ── I/O ──────────────────────────────────────────────────────────
+    #[error("I/O error: {source}")]
+    Io {
+        #[from]
+        source: std::io::Error,
+    },
 
-    #[error(transparent)]
-    Json(#[from] serde_json::Error),
+    #[error("JSON error: {source}")]
+    Json {
+        #[from]
+        source: serde_json::Error,
+    },
 
+    // ── Generic ──────────────────────────────────────────────────────
     #[error("{0}")]
     Internal(String),
 }
 
-/// Convenience alias used throughout the codebase.
-pub type Result<T> = std::result::Result<T, TestForgeError>;
+impl TestForgeError {
+    /// Create an internal error from any displayable message.
+    pub fn internal(msg: impl Into<String>) -> Self {
+        Self::Internal(msg.into())
+    }
+
+    /// Convenience constructor for parse errors.
+    pub fn parse_error(path: impl Into<PathBuf>, reason: impl Into<String>) -> Self {
+        Self::ParseError {
+            path: path.into(),
+            reason: reason.into(),
+        }
+    }
+
+    /// Returns a user-friendly suggestion for how to resolve this error.
+    pub fn suggestion(&self) -> Option<&'static str> {
+        match self {
+            Self::ConfigNotFound { .. } => Some("Run `testforge init` to create a configuration file."),
+            Self::IndexNotReady => Some("Run `testforge index .` to build the search index."),
+            Self::UnsupportedLanguage { .. } => {
+                Some("Supported languages: python, javascript, typescript, rust, java, go.")
+            }
+            Self::FileTooLarge { .. } => {
+                Some("Increase `indexer.max_file_size_kb` in .testforge/config.toml.")
+            }
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_display_includes_path() {
+        let err = TestForgeError::FileNotFound {
+            path: PathBuf::from("src/main.rs"),
+        };
+        assert!(err.to_string().contains("src/main.rs"));
+    }
+
+    #[test]
+    fn suggestion_returns_some_for_known_errors() {
+        let err = TestForgeError::IndexNotReady;
+        assert!(err.suggestion().is_some());
+    }
+
+    #[test]
+    fn suggestion_returns_none_for_generic_errors() {
+        let err = TestForgeError::internal("something broke");
+        assert!(err.suggestion().is_none());
+    }
+}
