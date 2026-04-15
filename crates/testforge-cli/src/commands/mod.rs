@@ -4,6 +4,7 @@ pub mod gen_tests;
 pub mod index;
 pub mod init;
 pub mod search;
+pub mod serve;
 pub mod status;
 
 use clap::Subcommand;
@@ -22,17 +23,21 @@ pub enum Command {
     /// Generate tests for a function, method, or file
     GenTests(gen_tests::GenTestsArgs),
 
+    /// Start the API server
+    Serve(serve::ServeArgs),
+
     /// Show the current index status
     Status(status::StatusArgs),
 }
 
 /// Execute the given CLI command.
-pub fn execute(cmd: Command) -> anyhow::Result<()> {
+pub async fn execute(cmd: Command) -> anyhow::Result<()> {
     match cmd {
         Command::Init(args) => init::run(args),
         Command::Index(args) => index::run(args),
         Command::Search(args) => search::run(args),
         Command::GenTests(args) => gen_tests::run(args),
+        Command::Serve(args) => serve::run(args).await,
         Command::Status(args) => status::run(args),
     }
 }

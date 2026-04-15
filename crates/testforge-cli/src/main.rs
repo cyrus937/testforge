@@ -22,7 +22,8 @@ struct Cli {
     verbose: u8,
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Configure logging based on verbosity
@@ -40,5 +41,5 @@ fn main() -> anyhow::Result<()> {
         .with_target(false)
         .init();
 
-    commands::execute(cli.command)
+    commands::execute(cli.command).await
 }
