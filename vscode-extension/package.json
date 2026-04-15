@@ -1,0 +1,129 @@
+{
+  "name": "testforge",
+  "displayName": "TestForge",
+  "description": "Semantic code search and AI-powered test generation",
+  "version": "0.1.0",
+  "publisher": "testforge",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/testforge/testforge"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Testing", "Other"],
+  "keywords": ["test", "testing", "AI", "search", "code generation"],
+  "activationEvents": [
+    "workspaceContains:.testforge/config.toml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "testforge.search",
+        "title": "TestForge: Search Codebase",
+        "icon": "$(search)"
+      },
+      {
+        "command": "testforge.generateTests",
+        "title": "TestForge: Generate Tests",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "testforge.generateTestsForSymbol",
+        "title": "TestForge: Generate Tests for This Symbol"
+      },
+      {
+        "command": "testforge.indexProject",
+        "title": "TestForge: Index Project",
+        "icon": "$(database)"
+      },
+      {
+        "command": "testforge.showStatus",
+        "title": "TestForge: Show Index Status"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "testforge.generateTestsForSymbol",
+          "group": "testforge",
+          "when": "editorHasSelection"
+        }
+      ],
+      "commandPalette": [
+        { "command": "testforge.search" },
+        { "command": "testforge.generateTests" },
+        { "command": "testforge.indexProject" },
+        { "command": "testforge.showStatus" }
+      ]
+    },
+    "configuration": {
+      "title": "TestForge",
+      "properties": {
+        "testforge.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:7654",
+          "description": "TestForge API server URL"
+        },
+        "testforge.autoIndex": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically index on file save"
+        },
+        "testforge.defaultFramework": {
+          "type": "string",
+          "default": "pytest",
+          "enum": ["pytest", "unittest", "jest", "mocha", "vitest", "cargo-test", "junit"],
+          "description": "Default test framework for generation"
+        },
+        "testforge.searchLimit": {
+          "type": "number",
+          "default": 15,
+          "description": "Maximum search results to display"
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "testforge",
+          "title": "TestForge",
+          "icon": "resources/icons/testforge.svg"
+        }
+      ]
+    },
+    "views": {
+      "testforge": [
+        {
+          "id": "testforgeSearch",
+          "name": "Search Results"
+        },
+        {
+          "id": "testforgeStatus",
+          "name": "Index Status"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^2.22.0",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  }
+}
