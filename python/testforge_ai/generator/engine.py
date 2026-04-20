@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from testforge_ai.bridge import SymbolInfo, TestForgeBridge
 from testforge_ai.generator.prompts.edge_cases import build_edge_case_prompt
@@ -80,7 +81,7 @@ class TestGenerator:
     def generate_for_symbol(
         self,
         qualified_name: str,
-        **kwargs,
+        **kwargs: Any,
     ) -> GeneratedTest:
         """
         Generate tests for a symbol identified by its qualified name.
@@ -111,7 +112,7 @@ class TestGenerator:
     def generate_for_file(
         self,
         file_path: str,
-        **kwargs,
+        **kwargs: Any,
     ) -> list[GeneratedTest]:
         """Generate tests for all public functions/methods in a file."""
         symbols = self.bridge.get_symbols_in_file(file_path)
@@ -190,7 +191,7 @@ class TestGenerator:
         self,
         target: SymbolInfo,
         all_symbols: list[SymbolInfo],
-    ) -> dict:
+    ) -> dict[str, list[SymbolInfo]]:
         """Assemble rich context for the LLM prompt."""
         # Find dependencies
         deps = [
@@ -240,7 +241,7 @@ class TestGenerator:
         # No code block found — return raw output
         return raw
 
-    def _init_provider(self, name: str, api_key: str | None):
+    def _init_provider(self, name: str, api_key: str | None) -> ClaudeProvider:
         """Initialize the LLM provider."""
         if name == "claude":
             return ClaudeProvider(api_key=api_key)

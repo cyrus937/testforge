@@ -41,6 +41,7 @@ dev = [
 testforge-ai = "testforge_ai.cli:main"
 
 [tool.maturin]
+manifest-path = "crates/testforge-python/Cargo.toml"
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "testforge_ai._rust"

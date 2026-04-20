@@ -14,6 +14,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from testforge_ai.bridge import SymbolInfo, TestForgeBridge
 from testforge_ai.embeddings.cache import EmbeddingCache
@@ -85,6 +86,7 @@ class EmbeddingPipeline:
 
         # Initialize cache
         cache_dir = self.project_root / ".testforge" / "cache" / "embeddings"
+        self._cache: EmbeddingCache | None
         if self.config.cache_enabled:
             self._cache = EmbeddingCache(self._provider, cache_dir)
         else:
@@ -179,7 +181,7 @@ class EmbeddingPipeline:
             Query embedding vector.
         """
         result = self._provider.embed_query(query)
-        return result.vector.tolist()
+        return cast(list[float], result.vector.tolist())
 
     def embed_symbol(self, symbol: SymbolInfo) -> list[float]:
         """Embed a single symbol."""
@@ -188,7 +190,7 @@ class EmbeddingPipeline:
             result = self._cache.embed_single(chunk)
         else:
             result = self._provider.embed_single(chunk)
-        return result.vector.tolist()
+        return cast(list[float], result.vector.tolist())
 
     def _build_chunk(self, symbol: SymbolInfo) -> str:
         """

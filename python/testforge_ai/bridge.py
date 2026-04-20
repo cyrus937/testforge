@@ -21,6 +21,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,8 @@ class TestForgeBridge:
 
     def __init__(self, project_root: Path):
         self.project_root = project_root.resolve()
+        self._cli_path: str | None = None
+        self._engine: Any | None = None
 
         if not (self.project_root / ".testforge").is_dir():
             raise FileNotFoundError(
@@ -101,12 +104,13 @@ class TestForgeBridge:
             self._engine = _rust.Engine(str(self.project_root))
             logger.info("Bridge initialized in native mode")
         else:
-            self._cli_path = shutil.which("testforge")
-            if self._cli_path is None:
+            cli_path = shutil.which("testforge")
+            if cli_path is None:
                 raise RuntimeError(
                     "Neither the Rust extension module nor the `testforge` CLI "
                     "binary could be found. Install TestForge with: cargo install testforge-cli"
                 )
+            self._cli_path = cli_path
             logger.info(
                 "Bridge initialized in subprocess mode (CLI: %s)", self._cli_path
             )
@@ -119,6 +123,7 @@ class TestForgeBridge:
     def get_all_symbols(self) -> list[SymbolInfo]:
         """Retrieve all indexed symbols."""
         if self._native:
+            assert self._engine is not None
             raw = self._engine.all_symbols()
             return [_parse_symbol(s) for s in raw]
 
@@ -128,6 +133,7 @@ class TestForgeBridge:
     def search_symbols(self, query: str, limit: int = 10) -> list[SymbolInfo]:
         """Search symbols by name (keyword match)."""
         if self._native:
+            assert self._engine is not None
             raw = self._engine.search(query, limit)
             return [_parse_symbol(s) for s in raw]
 
@@ -139,13 +145,14 @@ class TestForgeBridge:
     def get_status(self) -> IndexStatusInfo:
         """Get the current index status."""
         if self._native:
+            assert self._engine is not None
             raw = self._engine.status()
             return _parse_status(raw)
 
         output = self._run_cli(["status", "--json"])
         return _parse_status(json.loads(output))
 
-    def index_project(self, clean: bool = False) -> dict:
+    def index_project(self, clean: bool = False) -> dict[str, Any]:
         """
         Trigger a full index of the project.
 
@@ -160,7 +167,8 @@ class TestForgeBridge:
             Indexing report with file/symbol counts.
         """
         if self._native:
-            return self._engine.index(clean)
+            assert self._engine is not None
+            return cast(dict[str, Any], self._engine.index(clean))
 
         args = ["index", "."]
         if clean:
@@ -185,6 +193,9 @@ class TestForgeBridge:
 
     def _run_cli(self, args: list[str]) -> str:
         """Run a testforge CLI command and return stdout."""
+        if self._cli_path is None:
+            raise RuntimeError("CLI path not initialized")
+
         cmd = [self._cli_path, *args]
         logger.debug("Running: %s", " ".join(cmd))
 
@@ -205,7 +216,7 @@ class TestForgeBridge:
         return result.stdout
 
 
-def _parse_symbol(data: dict) -> SymbolInfo:
+def _parse_symbol(data: dict[str, Any]) -> SymbolInfo:
     """Parse a symbol dict (from JSON or PyO3) into SymbolInfo."""
     return SymbolInfo(
         name=data.get("name", ""),
@@ -225,7 +236,7 @@ def _parse_symbol(data: dict) -> SymbolInfo:
     )
 
 
-def _parse_status(data: dict) -> IndexStatusInfo:
+def _parse_status(data: dict[str, Any]) -> IndexStatusInfo:
     """Parse a status dict into IndexStatusInfo."""
     return IndexStatusInfo(
         file_count=data.get("file_count", 0),

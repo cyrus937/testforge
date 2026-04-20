@@ -6,6 +6,7 @@ members = [
     "crates/testforge-search",
     "crates/testforge-server",
     "crates/testforge-cli",
+    "crates/testforge-python",
 ]
 
 [workspace.package]
@@ -45,8 +46,10 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 tree-sitter = "0.24"
 tree-sitter-python = "0.23"
 tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
 tree-sitter-rust = "0.23"
 tree-sitter-java = "0.23"
+tree-sitter-go = "0.23"
 
 # Filesystem
 notify = { version = "7.0", features = ["serde"] }

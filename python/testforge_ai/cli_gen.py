@@ -61,7 +61,7 @@ def main() -> int:
         return 1
 
 
-def generate_tests(args: argparse.Namespace) -> dict:
+def generate_tests(args: argparse.Namespace) -> dict[str, object]:
     """Run the full test generation pipeline."""
     from testforge_ai.analysis.complexity import analyze_complexity
     from testforge_ai.analysis.context import ContextBuilder

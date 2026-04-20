@@ -4,6 +4,7 @@
 //! 1. Resolves the target symbol(s) from the index
 //! 2. Delegates to `testforge-ai gen` for LLM-powered generation
 //! 3. Writes the generated test files to the output directory
+
 use std::process::Command as ProcessCommand;
 use std::time::Instant;
 
@@ -279,63 +280,221 @@ fn resolve_targets(
     let all = indexer.all_symbols()?;
     let target = &args.target;
 
+    // Normalize the target path (strip leading ./)
+    let normalized_target = target.strip_prefix("./").unwrap_or(target).to_string();
+
     // Case 1: file::symbol notation
-    if target.contains("::") {
-        let parts: Vec<&str> = target.splitn(2, "::").collect();
+    if normalized_target.contains("::") {
+        let parts: Vec<&str> = normalized_target.splitn(2, "::").collect();
         let file = parts[0];
         let sym_name = parts[1];
 
         let matches: Vec<_> = all
             .into_iter()
             .filter(|s| {
-                s.file_path.to_string_lossy().contains(file)
-                    && (s.name == sym_name || s.qualified_name == sym_name)
+                path_matches(&s.file_path, file)
+                    && (s.name == sym_name
+                        || s.qualified_name == sym_name
+                        || s.qualified_name.ends_with(&format!(".{sym_name}"))
+                        || s.qualified_name.ends_with(&format!("::{sym_name}")))
             })
             .collect();
 
+        if matches.is_empty() {
+            print_diagnostic(&normalized_target, indexer);
+        }
+
         return Ok(matches);
     }
 
-    // Case 2: file path (all public symbols in file)
-    if target.contains('/') || target.contains('.') {
-        let path_target = std::path::Path::new(target);
+    // Case 2: looks like a file path
+    if normalized_target.contains('/') || normalized_target.contains('.') {
+        let path_target = std::path::Path::new(&normalized_target);
 
         if args.recursive && path_target.is_dir() {
-            // All symbols under the directory
             let matches: Vec<_> = all
                 .into_iter()
                 .filter(|s| {
-                    s.file_path.to_string_lossy().starts_with(target.as_str()) && is_testable(s)
+                    let sp = s.file_path.to_string_lossy();
+                    (sp.starts_with(&normalized_target) || sp.contains(&normalized_target))
+                        && is_testable_strict(s)
                 })
                 .collect();
+
+            if matches.is_empty() {
+                print_diagnostic(&normalized_target, indexer);
+            }
             return Ok(matches);
         }
 
-        // Single file
+        // Single file — use relaxed filter (include private functions, short functions)
+        // When the user explicitly targets a file, they want everything in it.
         let matches: Vec<_> = all
             .into_iter()
-            .filter(|s| s.file_path.to_string_lossy().contains(target.as_str()) && is_testable(s))
+            .filter(|s| path_matches(&s.file_path, &normalized_target) && is_testable_relaxed(s))
             .collect();
+
+        if matches.is_empty() {
+            print_diagnostic(&normalized_target, indexer);
+        }
+
         return Ok(matches);
     }
 
-    // Case 3: qualified symbol name
+    // Case 3: qualified symbol name (no path separator, no dots-with-extension)
     let matches: Vec<_> = all
         .into_iter()
         .filter(|s| {
-            s.qualified_name == *target
-                || s.name == *target
-                || s.qualified_name.ends_with(&format!(".{}", target))
-                || s.qualified_name.ends_with(&format!("::{}", target))
+            s.qualified_name == normalized_target
+                || s.name == normalized_target
+                || s.qualified_name
+                    .ends_with(&format!(".{}", normalized_target))
+                || s.qualified_name
+                    .ends_with(&format!("::{}", normalized_target))
         })
         .collect();
+
+    if matches.is_empty() {
+        print_diagnostic(&normalized_target, indexer);
+    }
 
     Ok(matches)
 }
 
-/// Check if a symbol is worth generating tests for.
-fn is_testable(sym: &testforge_core::models::Symbol) -> bool {
+/// Check if a file path matches a target pattern.
+///
+/// Handles various path formats:
+/// - `src/main.rs` matches `src/main.rs`
+/// - `main.rs` matches `src/main.rs` (suffix match)
+/// - `src/auth/` matches `src/auth/service.py` (prefix match)
+fn path_matches(file_path: &std::path::Path, target: &str) -> bool {
+    let file_str = file_path.to_string_lossy();
+    let normalized = file_str.strip_prefix("./").unwrap_or(&file_str);
+
+    // Exact match
+    if normalized == target {
+        return true;
+    }
+
+    // Target is a suffix (e.g., "main.rs" matches "src/main.rs")
+    if normalized.ends_with(target) {
+        // Ensure we match at a path boundary
+        let prefix_end = normalized.len() - target.len();
+        if prefix_end == 0 || normalized.as_bytes()[prefix_end - 1] == b'/' {
+            return true;
+        }
+    }
+
+    // Target is a prefix (directory match, e.g., "src/auth" matches "src/auth/service.py")
+    if normalized.starts_with(target) {
+        return true;
+    }
+
+    // Contains match (e.g., "auth/service" matches "src/auth/service.py")
+    if normalized.contains(target) {
+        return true;
+    }
+
+    false
+}
+
+/// Strict testability check — for recursive/automatic discovery.
+///
+/// Only includes public functions/methods with enough substance to test.
+fn is_testable_strict(sym: &testforge_core::models::Symbol) -> bool {
     matches!(sym.kind, SymbolKind::Function | SymbolKind::Method)
         && sym.visibility == testforge_core::models::Visibility::Public
         && sym.line_count() >= 3
+}
+
+/// Relaxed testability check — for explicit file/symbol targets.
+///
+/// Includes all functions and methods regardless of visibility or size.
+/// When the user explicitly asks for tests for a file, they want all of it.
+/// The only things we exclude are classes/structs/enums (type definitions)
+/// and trivially empty functions (1 line = just the signature).
+fn is_testable_relaxed(sym: &testforge_core::models::Symbol) -> bool {
+    matches!(sym.kind, SymbolKind::Function | SymbolKind::Method) && sym.line_count() >= 2
+}
+
+/// Print diagnostic information when no symbols are found.
+///
+/// Helps the user understand why their target didn't match:
+/// - Are there any indexed files at all?
+/// - Is the file indexed but with no matching symbols?
+/// - Did the path not match any indexed file?
+fn print_diagnostic(target: &str, indexer: &Indexer) {
+    let all = match indexer.all_symbols() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    if all.is_empty() {
+        println!(
+            "  {} The index is empty. Run {} first.",
+            "ℹ".blue(),
+            "testforge index .".cyan()
+        );
+        return;
+    }
+
+    // Collect unique indexed file paths
+    let mut indexed_files: Vec<String> = all
+        .iter()
+        .map(|s| s.file_path.to_string_lossy().to_string())
+        .collect();
+    indexed_files.sort();
+    indexed_files.dedup();
+
+    // Check if any file partially matches
+    let partial_matches: Vec<_> = indexed_files
+        .iter()
+        .filter(|f| {
+            f.contains(target)
+                || target.contains(f.as_str())
+                || f.to_lowercase().contains(&target.to_lowercase())
+        })
+        .collect();
+
+    if !partial_matches.is_empty() {
+        println!("  {} Similar indexed files found:", "ℹ".blue());
+        for f in partial_matches.iter().take(5) {
+            let syms_in_file: Vec<_> = all
+                .iter()
+                .filter(|s| s.file_path.to_string_lossy() == **f)
+                .collect();
+            println!(
+                "    {} ({} symbols: {})",
+                f.to_string().underline(),
+                syms_in_file.len(),
+                syms_in_file
+                    .iter()
+                    .take(5)
+                    .map(|s| format!("{} {}", s.kind, s.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        println!();
+        println!(
+            "  {} Check the exact path with: {}",
+            "💡".bold(),
+            "testforge search <keyword> --format json | jq '.[].file_path'".dimmed()
+        );
+    } else {
+        // No match at all — show some indexed files for reference
+        println!(
+            "  {} {} indexed files, but none matching \"{}\".",
+            "ℹ".blue(),
+            indexed_files.len(),
+            target
+        );
+        println!("  Indexed files (first 10):");
+        for f in indexed_files.iter().take(10) {
+            println!("    {}", f.dimmed());
+        }
+        if indexed_files.len() > 10 {
+            println!("    ... and {} more", indexed_files.len() - 10);
+        }
+    }
 }

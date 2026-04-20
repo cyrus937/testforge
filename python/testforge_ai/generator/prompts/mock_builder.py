@@ -67,8 +67,9 @@ def build_mock_prompt(
     return "\n".join(sections)
 
 
-def _suggest_strategy(dep: SymbolInfo) -> dict:
+def _suggest_strategy(dep: SymbolInfo) -> dict[str, str]:
     """Suggest the best mocking strategy for a dependency."""
+
     source_lower = dep.source.lower()
     name_lower = dep.name.lower()
 

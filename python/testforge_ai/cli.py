@@ -62,7 +62,7 @@ def cmd_embed(args: argparse.Namespace) -> int:
 
 def cmd_search(args: argparse.Namespace) -> int:
     """Semantic search using query embeddings."""
-    from testforge_ai.bridge import TestForgeBridge
+    from testforge_ai.bridge import SymbolInfo, TestForgeBridge
     from testforge_ai.embeddings.pipeline import EmbeddingPipeline, EmbeddingPipelineConfig
 
     project_root = Path(args.project).resolve()
@@ -85,7 +85,7 @@ def cmd_search(args: argparse.Namespace) -> int:
             return 1
 
         # Embed and score each symbol
-        scored: list[tuple[float, object]] = []
+        scored: list[tuple[float, SymbolInfo]] = []
         for sym in symbols:
             try:
                 sym_vec = pipeline.embed_symbol(sym)

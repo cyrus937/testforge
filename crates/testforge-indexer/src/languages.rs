@@ -11,7 +11,10 @@ pub fn grammar_for(language: Language) -> Option<TsLanguage> {
     match language {
         Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
         Language::JavaScript => Some(tree_sitter_javascript::LANGUAGE.into()),
+        Language::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
         Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
+        Language::Java => Some(tree_sitter_java::LANGUAGE.into()),
+        Language::Go => Some(tree_sitter_go::LANGUAGE.into()),
         // Languages with grammars not yet wired up return None.
         _ => None,
     }
@@ -29,7 +32,10 @@ pub fn symbol_query_for(language: Language) -> Option<&'static str> {
     match language {
         Language::Python => Some(PYTHON_SYMBOLS_QUERY),
         Language::JavaScript => Some(JAVASCRIPT_SYMBOLS_QUERY),
+        Language::TypeScript => Some(TYPESCRIPT_SYMBOLS_QUERY),
         Language::Rust => Some(RUST_SYMBOLS_QUERY),
+        Language::Java => Some(JAVA_SYMBOLS_QUERY),
+        Language::Go => Some(GO_SYMBOLS_QUERY),
         _ => None,
     }
 }
@@ -131,6 +137,84 @@ const JAVASCRIPT_SYMBOLS_QUERY: &str = r#"
 ) @export_definition
 "#;
 
+// ── Java ─────────────────────────────────────────────────────────────
+const JAVA_SYMBOLS_QUERY: &str = r#"
+; Class declarations
+(class_declaration
+  name: (identifier) @class_name
+  body: (class_body) @class_body
+) @class_definition
+
+; Method declarations
+(method_declaration
+  name: (identifier) @method_name
+  parameters: (formal_parameters) @method_params
+  body: (block) @method_body
+) @method_definition
+
+; Field declarations (constants)
+(field_declaration
+  name: (variable_declarator
+    name: (identifier) @field_name
+    value: (_) @field_value
+  )
+) @field_definition
+"#;
+
+// ── Go ──────────────────────────────────────────────────────────────
+const GO_SYMBOLS_QUERY: &str = r#"
+; Function declarations
+(function_declaration
+  name: (identifier) @name
+  parameters: (parameter_list) @params
+  body: (block) @body
+) @definition
+
+; Method declarations
+(method_declaration
+  name: (identifier) @method_name
+  parameters: (parameter_list) @method_params
+  body: (block) @method_body
+) @method_definition
+
+; Type declarations (structs, interfaces)
+(type_declaration
+  (type_spec
+    name: (type_identifier) @type_name
+    type: [
+      (struct_type
+        field_declaration_list: (field_declaration
+          name: (field_identifier) @field_name
+          type: (_) @field_type
+        )
+      )
+      (interface_type
+        method_declaration_list: (method_declaration
+          name: (identifier) @interface_method_name
+          parameters: (parameter_list) @interface_method_params
+          body: (block) @interface_method_body
+        )
+      )
+    ]
+  )
+) @type_definition
+"#;
+
+// ── TypeScript ─────────────────────────────────────────────────────────────
+const TYPESCRIPT_SYMBOLS_QUERY: &str = r#"
+; Similar to JavaScript but also captures interfaces and type aliases 
+; Interface declarations
+(interface_declaration
+  name: (identifier) @interface_name
+  body: (object_type) @interface_body
+) @interface_definition
+; Type alias declarations
+(type_alias_declaration
+  name: (identifier) @type_alias_name
+  type: (type) @type_alias_body
+) @type_alias_definition
+"#;
+
 // ── Rust ─────────────────────────────────────────────────────────────
 
 const RUST_SYMBOLS_QUERY: &str = r#"
@@ -181,7 +265,14 @@ pub fn is_supported(language: Language) -> bool {
 
 /// Return all currently supported languages.
 pub fn supported_languages() -> Vec<Language> {
-    vec![Language::Python, Language::JavaScript, Language::Rust]
+    vec![
+        Language::Python,
+        Language::JavaScript,
+        Language::Rust,
+        Language::TypeScript,
+        Language::Java,
+        Language::Go,
+    ]
 }
 
 #[cfg(test)]
@@ -205,7 +296,7 @@ mod tests {
 
     #[test]
     fn unsupported_language_returns_none() {
-        assert!(grammar_for(Language::Go).is_none());
+        assert!(grammar_for(Language::CSharp).is_none());
     }
 
     #[test]

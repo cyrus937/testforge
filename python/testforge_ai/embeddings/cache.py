@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
@@ -118,7 +119,7 @@ class EmbeddingCache:
         path = self._cache_path(text)
         if path.exists():
             try:
-                return np.load(path)
+                return cast(np.ndarray, np.load(path))
             except Exception:
                 logger.warning("Corrupt cache entry %s, removing", path.name)
                 path.unlink(missing_ok=True)

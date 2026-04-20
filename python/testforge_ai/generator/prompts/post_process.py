@@ -16,6 +16,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from testforge_ai.bridge import SymbolInfo
 
@@ -145,7 +146,7 @@ class PostProcessor:
         """Extract code from markdown fenced code blocks."""
         # Try to find fenced code blocks
         pattern = r"```(?:\w+)?\s*\n(.*?)```"
-        matches = re.findall(pattern, raw, re.DOTALL)
+        matches = cast(list[str], re.findall(pattern, raw, re.DOTALL))
 
         if matches:
             # Return the longest code block (likely the main test file)

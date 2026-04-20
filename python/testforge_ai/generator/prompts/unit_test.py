@@ -13,7 +13,7 @@ from testforge_ai.bridge import SymbolInfo
 
 def build_unit_test_prompt(
     target: SymbolInfo,
-    context: dict,
+    context: dict[str, list[SymbolInfo]],
     framework: str = "pytest",
     include_mocks: bool = True,
 ) -> str:

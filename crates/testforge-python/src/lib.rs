@@ -16,8 +16,9 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use testforge_core::{Language, TestForgeConfig};
-use testforge_indexer::Indexer;
+use testforge_core::{Config};
+use testforge_core::models::Language;
+use testforge_indexer::{self, Indexer, Parser};
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -60,8 +61,9 @@ fn parse_source(
 ) -> PyResult<PyObject> {
     let lang = parse_language(language)?;
     let path = PathBuf::from(file_path);
+    let mut parser = Parser::new().map_err(to_py_err)?;
     let symbols =
-        testforge_indexer::parser::parse_file(source, &path, lang).map_err(to_py_err)?;
+        parser.parse_and_extract(source, lang, &path).map_err(to_py_err)?;
 
     let json = serde_json::to_string(&symbols)
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
@@ -87,21 +89,23 @@ fn index_project(
     let root_path = PathBuf::from(root);
 
     let config = match config_path {
-        Some(cp) => TestForgeConfig::load(&PathBuf::from(cp)).map_err(to_py_err)?,
-        None => TestForgeConfig::load_or_default(&root_path).map_err(to_py_err)?,
+        Some(cp) => Config::load(&PathBuf::from(cp)).map_err(to_py_err)?,
+        None => Config::default(),
     };
 
-    let indexer = Indexer::new(config);
-    let index = indexer.index(&root_path).map_err(to_py_err)?;
+    let mut indexer = Indexer::new(config, &root_path).map_err(to_py_err)?;
+    let report = indexer.index_full().map_err(to_py_err)?;
 
     // Build a serializable summary.
     let summary = serde_json::json!({
-        "root": index.root.to_string_lossy(),
-        "symbols": index.symbols,
-        "files": index.files,
-        "stats": index.stats,
-        "graph_edge_count": index.graph.edge_count(),
-        "graph_node_count": index.graph.node_count(),
+        "root": root,
+        "files_indexed": report.files_indexed,
+        "files_skipped": report.files_skipped,
+        "files_failed": report.files_failed,
+        "symbols_extracted": report.symbols_extracted,
+        "errors": report.errors.iter().map(|(p, e)| {
+            serde_json::json!({"path": p.to_string_lossy(), "error": e})
+        }).collect::<Vec<_>>(),
     });
 
     let json = serde_json::to_string(&summary)
@@ -119,10 +123,10 @@ fn supported_languages() -> Vec<String> {
         .collect()
 }
 
-/// Compute the SHA-256 hash of a byte string.
+/// Compute the SHA-256 hash of a string.
 #[pyfunction]
-fn content_hash(data: &[u8]) -> String {
-    testforge_indexer::watcher::compute_hash(data)
+fn content_hash(data: &str) -> String {
+    testforge_indexer::compute_hash(data)
 }
 
 // ─── Module Registration ────────────────────────────────────────────

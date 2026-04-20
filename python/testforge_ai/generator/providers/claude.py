@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +43,9 @@ class ClaudeProvider:
             )
 
         self._model = model
-        self._client = None
+        self._client: Any | None = None
 
-    def _get_client(self):
+    def _get_client(self) -> Any:
         """Lazy-initialize the Anthropic client."""
         if self._client is None:
             try:

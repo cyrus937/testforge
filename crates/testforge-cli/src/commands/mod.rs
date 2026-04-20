@@ -1,5 +1,6 @@
 //! CLI command definitions and dispatcher.
 
+pub mod ci;
 pub mod gen_tests;
 pub mod index;
 pub mod init;
@@ -26,6 +27,9 @@ pub enum Command {
     /// Start the API server
     Serve(serve::ServeArgs),
 
+    /// Run CI/CD analysis (coverage gaps, report generation)
+    Ci(ci::CiArgs),
+
     /// Show the current index status
     Status(status::StatusArgs),
 }
@@ -38,6 +42,7 @@ pub async fn execute(cmd: Command) -> anyhow::Result<()> {
         Command::Search(args) => search::run(args),
         Command::GenTests(args) => gen_tests::run(args),
         Command::Serve(args) => serve::run(args).await,
+        Command::Ci(args) => ci::run(args),
         Command::Status(args) => status::run(args),
     }
 }

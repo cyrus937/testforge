@@ -27,6 +27,8 @@ pub fn extract_symbols(
             extract_javascript_symbols(source, root, file_path, language)
         }
         Language::Rust => extract_rust_symbols(source, root, file_path),
+        Language::Java => extract_java_symbols(source, root, file_path),
+        Language::Go => extract_go_symbols(source, root, file_path),
         _ => Ok(Vec::new()),
     }
 }
@@ -628,6 +630,322 @@ fn detect_rust_visibility(node: &Node, source: &[u8]) -> Visibility {
         }
     }
     Visibility::Private
+}
+
+// ── Java Extractor ───────────────────────────────────────────────────
+
+fn extract_java_symbols(source: &str, root: &Node, file_path: &Path) -> Result<Vec<Symbol>> {
+    let mut symbols = Vec::new();
+    let source_bytes = source.as_bytes();
+    walk_java_node(root, source_bytes, file_path, None, &mut symbols);
+    Ok(symbols)
+}
+
+fn walk_java_node(
+    node: &Node,
+    source: &[u8],
+    file_path: &Path,
+    parent_class: Option<&str>,
+    symbols: &mut Vec<Symbol>,
+) {
+    let mut cursor = node.walk();
+
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "class_declaration" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if let Some(name) = node_text(&name_node, source) {
+                        let full_source = node_text(&child, source).unwrap_or_default();
+                        let vis = detect_java_visibility(&child, source);
+
+                        symbols.push(Symbol {
+                            id: Uuid::new_v4(),
+                            name: name.clone(),
+                            qualified_name: name.clone(),
+                            kind: SymbolKind::Class,
+                            language: Language::Java,
+                            file_path: file_path.to_path_buf(),
+                            start_line: child.start_position().row + 1,
+                            end_line: child.end_position().row + 1,
+                            source: full_source.clone(),
+                            signature: None,
+                            docstring: None,
+                            dependencies: Vec::new(),
+                            parent: parent_class.map(String::from),
+                            visibility: vis,
+                            content_hash: compute_hash(&full_source),
+                        });
+
+                        if let Some(body) = child.child_by_field_name("body") {
+                            walk_java_node(&body, source, file_path, Some(&name), symbols);
+                        }
+                    }
+                }
+            }
+            "interface_declaration" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if let Some(name) = node_text(&name_node, source) {
+                        let full_source = node_text(&child, source).unwrap_or_default();
+
+                        symbols.push(Symbol {
+                            id: Uuid::new_v4(),
+                            name: name.clone(),
+                            qualified_name: name,
+                            kind: SymbolKind::Interface,
+                            language: Language::Java,
+                            file_path: file_path.to_path_buf(),
+                            start_line: child.start_position().row + 1,
+                            end_line: child.end_position().row + 1,
+                            source: full_source.clone(),
+                            signature: None,
+                            docstring: None,
+                            dependencies: Vec::new(),
+                            parent: None,
+                            visibility: Visibility::Public,
+                            content_hash: compute_hash(&full_source),
+                        });
+                    }
+                }
+            }
+            "method_declaration" | "constructor_declaration" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if let Some(name) = node_text(&name_node, source) {
+                        let full_source = node_text(&child, source).unwrap_or_default();
+                        let vis = detect_java_visibility(&child, source);
+                        let qualified = match parent_class {
+                            Some(cls) => format!("{cls}.{name}"),
+                            None => name.clone(),
+                        };
+                        let signature = full_source
+                            .find('{')
+                            .map(|i| full_source[..i].trim().to_string());
+
+                        symbols.push(Symbol {
+                            id: Uuid::new_v4(),
+                            name,
+                            qualified_name: qualified,
+                            kind: SymbolKind::Method,
+                            language: Language::Java,
+                            file_path: file_path.to_path_buf(),
+                            start_line: child.start_position().row + 1,
+                            end_line: child.end_position().row + 1,
+                            source: full_source.clone(),
+                            signature,
+                            docstring: None,
+                            dependencies: Vec::new(),
+                            parent: parent_class.map(String::from),
+                            visibility: vis,
+                            content_hash: compute_hash(&full_source),
+                        });
+                    }
+                }
+            }
+            "enum_declaration" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if let Some(name) = node_text(&name_node, source) {
+                        let full_source = node_text(&child, source).unwrap_or_default();
+                        symbols.push(Symbol {
+                            id: Uuid::new_v4(),
+                            name: name.clone(),
+                            qualified_name: name,
+                            kind: SymbolKind::Enum,
+                            language: Language::Java,
+                            file_path: file_path.to_path_buf(),
+                            start_line: child.start_position().row + 1,
+                            end_line: child.end_position().row + 1,
+                            source: full_source.clone(),
+                            signature: None,
+                            docstring: None,
+                            dependencies: Vec::new(),
+                            parent: None,
+                            visibility: Visibility::Public,
+                            content_hash: compute_hash(&full_source),
+                        });
+                    }
+                }
+            }
+            _ => {
+                if child.child_count() > 0 {
+                    walk_java_node(&child, source, file_path, parent_class, symbols);
+                }
+            }
+        }
+    }
+}
+
+fn detect_java_visibility(node: &Node, source: &[u8]) -> Visibility {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "modifiers" {
+            let text = node_text(&child, source).unwrap_or_default();
+            if text.contains("public") {
+                return Visibility::Public;
+            }
+            if text.contains("private") {
+                return Visibility::Private;
+            }
+            if text.contains("protected") {
+                return Visibility::Protected;
+            }
+        }
+    }
+    Visibility::Internal // Java default = package-private
+}
+
+// ── Go Extractor ─────────────────────────────────────────────────────
+
+fn extract_go_symbols(source: &str, root: &Node, file_path: &Path) -> Result<Vec<Symbol>> {
+    let mut symbols = Vec::new();
+    let source_bytes = source.as_bytes();
+    walk_go_node(root, source_bytes, file_path, &mut symbols);
+    Ok(symbols)
+}
+
+fn walk_go_node(node: &Node, source: &[u8], file_path: &Path, symbols: &mut Vec<Symbol>) {
+    let mut cursor = node.walk();
+
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "function_declaration" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if let Some(name) = node_text(&name_node, source) {
+                        let full_source = node_text(&child, source).unwrap_or_default();
+                        let vis = if name.starts_with(|c: char| c.is_uppercase()) {
+                            Visibility::Public
+                        } else {
+                            Visibility::Private
+                        };
+                        let signature = full_source
+                            .find('{')
+                            .map(|i| full_source[..i].trim().to_string());
+
+                        symbols.push(Symbol {
+                            id: Uuid::new_v4(),
+                            name: name.clone(),
+                            qualified_name: name,
+                            kind: SymbolKind::Function,
+                            language: Language::Go,
+                            file_path: file_path.to_path_buf(),
+                            start_line: child.start_position().row + 1,
+                            end_line: child.end_position().row + 1,
+                            source: full_source.clone(),
+                            signature,
+                            docstring: None,
+                            dependencies: Vec::new(),
+                            parent: None,
+                            visibility: vis,
+                            content_hash: compute_hash(&full_source),
+                        });
+                    }
+                }
+            }
+            "method_declaration" => {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if let Some(name) = node_text(&name_node, source) {
+                        let full_source = node_text(&child, source).unwrap_or_default();
+
+                        // Extract receiver type
+                        let receiver = child
+                            .child_by_field_name("receiver")
+                            .and_then(|r| node_text(&r, source))
+                            .and_then(|t| {
+                                // Parse "(s *Service)" → "Service"
+                                let arr_char = ['*', ' '];
+                                t.split(|c: char| arr_char.contains(&c))
+                                    .rfind(|p| !p.is_empty() && *p != "(" && *p != ")")
+                                    .map(|s| s.trim_matches(')').to_string())
+                            });
+
+                        let qualified = match &receiver {
+                            Some(r) => format!("{r}.{name}"),
+                            None => name.clone(),
+                        };
+                        let vis = if name.starts_with(|c: char| c.is_uppercase()) {
+                            Visibility::Public
+                        } else {
+                            Visibility::Private
+                        };
+                        let signature = full_source
+                            .find('{')
+                            .map(|i| full_source[..i].trim().to_string());
+
+                        symbols.push(Symbol {
+                            id: Uuid::new_v4(),
+                            name,
+                            qualified_name: qualified,
+                            kind: SymbolKind::Method,
+                            language: Language::Go,
+                            file_path: file_path.to_path_buf(),
+                            start_line: child.start_position().row + 1,
+                            end_line: child.end_position().row + 1,
+                            source: full_source.clone(),
+                            signature,
+                            docstring: None,
+                            dependencies: Vec::new(),
+                            parent: receiver,
+                            visibility: vis,
+                            content_hash: compute_hash(&full_source),
+                        });
+                    }
+                }
+            }
+            "type_declaration" => {
+                // type Foo struct { ... } / type Bar interface { ... }
+                walk_go_type_decl(&child, source, file_path, symbols);
+            }
+            _ => {
+                if child.child_count() > 0 {
+                    walk_go_node(&child, source, file_path, symbols);
+                }
+            }
+        }
+    }
+}
+
+fn walk_go_type_decl(node: &Node, source: &[u8], file_path: &Path, symbols: &mut Vec<Symbol>) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "type_spec" {
+            let name_node = match child.child_by_field_name("name") {
+                Some(n) => n,
+                None => continue,
+            };
+            let name = match node_text(&name_node, source) {
+                Some(n) => n,
+                None => continue,
+            };
+            let type_node = child.child_by_field_name("type");
+            let kind = match type_node.as_ref().map(|n| n.kind()) {
+                Some("struct_type") => SymbolKind::Struct,
+                Some("interface_type") => SymbolKind::Interface,
+                _ => SymbolKind::Struct,
+            };
+            let full_source = node_text(node, source).unwrap_or_default();
+            let vis = if name.starts_with(|c: char| c.is_uppercase()) {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            };
+
+            symbols.push(Symbol {
+                id: Uuid::new_v4(),
+                name: name.clone(),
+                qualified_name: name,
+                kind,
+                language: Language::Go,
+                file_path: file_path.to_path_buf(),
+                start_line: node.start_position().row + 1,
+                end_line: node.end_position().row + 1,
+                source: full_source.clone(),
+                signature: None,
+                docstring: None,
+                dependencies: Vec::new(),
+                parent: None,
+                visibility: vis,
+                content_hash: compute_hash(&full_source),
+            });
+        }
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
