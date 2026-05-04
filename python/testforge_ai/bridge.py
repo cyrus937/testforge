@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import shutil
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ try:
     _NATIVE_AVAILABLE = True
     logger.debug("Rust extension module loaded (native mode)")
 except ImportError:
-    logger.debug("Rust extension not available, falling back to subprocess mode")
+    logger.debug("Rust extension not available, falling back to SQLite mode")
 
 
 @dataclass
@@ -48,10 +48,10 @@ class SymbolInfo:
     start_line: int
     end_line: int
     source: str
-    signature: str | None = None
-    docstring: str | None = None
+    signature: Optional[str] = None
+    docstring: Optional[str] = None
     dependencies: list[str] = field(default_factory=list)
-    parent: str | None = None
+    parent: Optional[str] = None
     visibility: str = "public"
     content_hash: str = ""
 
@@ -68,7 +68,7 @@ class IndexStatusInfo:
     symbol_count: int
     embedding_count: int
     languages: list[str]
-    last_indexed: str | None = None
+    last_indexed: Optional[str] = None
     watcher_active: bool = False
 
 
@@ -90,8 +90,6 @@ class TestForgeBridge:
 
     def __init__(self, project_root: Path):
         self.project_root = project_root.resolve()
-        self._cli_path: str | None = None
-        self._engine: Any | None = None
 
         if not (self.project_root / ".testforge").is_dir():
             raise FileNotFoundError(
@@ -104,79 +102,75 @@ class TestForgeBridge:
             self._engine = _rust.Engine(str(self.project_root))
             logger.info("Bridge initialized in native mode")
         else:
-            cli_path = shutil.which("testforge")
-            if cli_path is None:
-                raise RuntimeError(
-                    "Neither the Rust extension module nor the `testforge` CLI "
-                    "binary could be found. Install TestForge with: cargo install testforge-cli"
-                )
-            self._cli_path = cli_path
-            logger.info(
-                "Bridge initialized in subprocess mode (CLI: %s)", self._cli_path
+            # SQLite mode — read directly from the index database
+            self._db_path = (
+                self.project_root / ".testforge" / "index" / "testforge.db"
             )
+            if not self._db_path.exists():
+                raise FileNotFoundError(
+                    f"Index database not found at {self._db_path}. "
+                    "Run `testforge index .` first."
+                )
+            logger.info("Bridge initialized in SQLite mode (db: %s)", self._db_path)
 
     @property
     def mode(self) -> str:
-        """Return the current execution mode: 'native' or 'subprocess'."""
-        return "native" if self._native else "subprocess"
+        """Return the current execution mode: 'native' or 'sqlite'."""
+        return "native" if self._native else "sqlite"
 
     def get_all_symbols(self) -> list[SymbolInfo]:
         """Retrieve all indexed symbols."""
         if self._native:
-            assert self._engine is not None
             raw = self._engine.all_symbols()
             return [_parse_symbol(s) for s in raw]
 
-        output = self._run_cli(["search", "", "--format", "json"])
-        return [_parse_symbol(s) for s in json.loads(output)]
+        return self._query_symbols_from_db()
 
     def search_symbols(self, query: str, limit: int = 10) -> list[SymbolInfo]:
-        """Search symbols by name (keyword match)."""
+        """Search symbols by name (case-insensitive substring match)."""
         if self._native:
-            assert self._engine is not None
             raw = self._engine.search(query, limit)
             return [_parse_symbol(s) for s in raw]
 
-        output = self._run_cli(
-            ["search", query, "--limit", str(limit), "--format", "json"]
-        )
-        return [_parse_symbol(s) for s in json.loads(output)]
+        return self._search_symbols_in_db(query, limit)
 
     def get_status(self) -> IndexStatusInfo:
         """Get the current index status."""
         if self._native:
-            assert self._engine is not None
             raw = self._engine.status()
             return _parse_status(raw)
 
-        output = self._run_cli(["status", "--json"])
-        return _parse_status(json.loads(output))
+        return self._status_from_db()
 
-    def index_project(self, clean: bool = False) -> dict[str, Any]:
+    def index_project(self, clean: bool = False) -> dict:
         """
         Trigger a full index of the project.
 
-        Parameters
-        ----------
-        clean : bool
-            If True, clear the existing index first.
-
-        Returns
-        -------
-        dict
-            Indexing report with file/symbol counts.
+        In SQLite mode, delegates to the testforge CLI if available.
         """
         if self._native:
-            assert self._engine is not None
-            return cast(dict[str, Any], self._engine.index(clean))
+            return self._engine.index(clean)
 
-        args = ["index", "."]
+        cli = shutil.which("testforge")
+        if cli is None:
+            raise RuntimeError("testforge CLI not found. Cannot trigger indexing.")
+
+        import subprocess
+        args = [cli, "index", "."]
         if clean:
             args.append("--clean")
-        output = self._run_cli(args)
-        return {"output": output}
 
-    def get_symbol_source(self, qualified_name: str) -> str | None:
+        result = subprocess.run(
+            args, capture_output=True, text=True,
+            cwd=str(self.project_root), timeout=120,
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(f"Indexing failed: {result.stderr.strip()}")
+
+        return {"output": result.stdout}
+
+    def get_symbol_source(self, qualified_name: str) -> Optional[str]:
         """Get the source code of a specific symbol by qualified name."""
         symbols = self.get_all_symbols()
         for sym in symbols:
@@ -189,34 +183,125 @@ class TestForgeBridge:
         all_symbols = self.get_all_symbols()
         return [s for s in all_symbols if s.file_path == file_path]
 
-    # ── Internal ──────────────────────────────────────────────────
+    # ── SQLite direct access ──────────────────────────────────────
 
-    def _run_cli(self, args: list[str]) -> str:
-        """Run a testforge CLI command and return stdout."""
-        if self._cli_path is None:
-            raise RuntimeError("CLI path not initialized")
+    def _get_db(self) -> sqlite3.Connection:
+        """Open a read-only connection to the index database."""
+        conn = sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn
 
-        cmd = [self._cli_path, *args]
-        logger.debug("Running: %s", " ".join(cmd))
+    def _query_symbols_from_db(self) -> list[SymbolInfo]:
+        """Read all symbols directly from SQLite."""
+        conn = self._get_db()
+        try:
+            rows = conn.execute(
+                "SELECT id, name, qualified_name, kind, language, file_path, "
+                "start_line, end_line, source, signature, docstring, "
+                "dependencies, parent, visibility, content_hash "
+                "FROM symbols ORDER BY file_path, start_line"
+            ).fetchall()
+            return [self._row_to_symbol(row) for row in rows]
+        finally:
+            conn.close()
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=str(self.project_root),
-            timeout=120,
+    def _search_symbols_in_db(self, query: str, limit: int) -> list[SymbolInfo]:
+        """Search symbols in SQLite by name substring."""
+        conn = self._get_db()
+        try:
+            pattern = f"%{query}%"
+            rows = conn.execute(
+                "SELECT id, name, qualified_name, kind, language, file_path, "
+                "start_line, end_line, source, signature, docstring, "
+                "dependencies, parent, visibility, content_hash "
+                "FROM symbols "
+                "WHERE name LIKE ?1 OR qualified_name LIKE ?1 "
+                "   OR docstring LIKE ?1 OR source LIKE ?1 "
+                "ORDER BY CASE "
+                "  WHEN name = ?2 THEN 0 "
+                "  WHEN name LIKE ?2 || '%' THEN 1 "
+                "  ELSE 2 "
+                "END, name "
+                "LIMIT ?3",
+                (pattern, query, limit),
+            ).fetchall()
+            return [self._row_to_symbol(row) for row in rows]
+        finally:
+            conn.close()
+
+    def _status_from_db(self) -> IndexStatusInfo:
+        """Read index status directly from SQLite."""
+        conn = self._get_db()
+        try:
+            file_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+            symbol_count = conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+            embedding_count = conn.execute(
+                "SELECT COUNT(*) FROM symbols WHERE embedding IS NOT NULL"
+            ).fetchone()[0]
+
+            lang_rows = conn.execute("SELECT DISTINCT language FROM files").fetchall()
+            languages = []
+            for row in lang_rows:
+                try:
+                    languages.append(json.loads(row[0]))
+                except (json.JSONDecodeError, TypeError):
+                    languages.append(row[0])
+
+            last_row = conn.execute("SELECT MAX(indexed_at) FROM files").fetchone()
+            last_indexed = last_row[0] if last_row else None
+
+            return IndexStatusInfo(
+                file_count=file_count,
+                symbol_count=symbol_count,
+                embedding_count=embedding_count,
+                languages=languages,
+                last_indexed=last_indexed,
+            )
+        finally:
+            conn.close()
+
+    def _row_to_symbol(self, row: sqlite3.Row) -> SymbolInfo:
+        """Convert a SQLite row to a SymbolInfo."""
+        # Parse JSON fields
+        try:
+            kind = json.loads(row["kind"]).replace('"', '')
+        except (json.JSONDecodeError, TypeError):
+            kind = str(row["kind"]).strip('"')
+
+        try:
+            language = json.loads(row["language"]).replace('"', '')
+        except (json.JSONDecodeError, TypeError):
+            language = str(row["language"]).strip('"')
+
+        try:
+            deps = json.loads(row["dependencies"])
+        except (json.JSONDecodeError, TypeError):
+            deps = []
+
+        try:
+            visibility = json.loads(row["visibility"]).replace('"', '')
+        except (json.JSONDecodeError, TypeError):
+            visibility = str(row["visibility"]).strip('"')
+
+        return SymbolInfo(
+            name=row["name"],
+            qualified_name=row["qualified_name"],
+            kind=kind,
+            language=language,
+            file_path=row["file_path"],
+            start_line=row["start_line"],
+            end_line=row["end_line"],
+            source=row["source"],
+            signature=row["signature"],
+            docstring=row["docstring"],
+            dependencies=deps if isinstance(deps, list) else [],
+            parent=row["parent"],
+            visibility=visibility,
+            content_hash=row["content_hash"],
         )
 
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"testforge command failed (exit {result.returncode}): "
-                f"{result.stderr.strip()}"
-            )
 
-        return result.stdout
-
-
-def _parse_symbol(data: dict[str, Any]) -> SymbolInfo:
+def _parse_symbol(data: dict) -> SymbolInfo:
     """Parse a symbol dict (from JSON or PyO3) into SymbolInfo."""
     return SymbolInfo(
         name=data.get("name", ""),
@@ -236,7 +321,7 @@ def _parse_symbol(data: dict[str, Any]) -> SymbolInfo:
     )
 
 
-def _parse_status(data: dict[str, Any]) -> IndexStatusInfo:
+def _parse_status(data: dict) -> IndexStatusInfo:
     """Parse a status dict into IndexStatusInfo."""
     return IndexStatusInfo(
         file_count=data.get("file_count", 0),
