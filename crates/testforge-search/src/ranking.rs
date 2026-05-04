@@ -25,16 +25,16 @@ pub fn rerank(results: &mut [SearchResult]) {
             Visibility::Private => 0.85,
         };
 
-        // Kind boost — actionable symbols rank higher
+
+        // Kind boost — classes/structs are primary entities worth highlighting
         boost *= match result.symbol.kind {
-            SymbolKind::Function | SymbolKind::Method => 1.1,
-            SymbolKind::Class | SymbolKind::Struct => 1.0,
-            SymbolKind::Trait | SymbolKind::Interface => 1.0,
-            SymbolKind::Enum => 0.95,
+            SymbolKind::Function | SymbolKind::Method => 0.95,
+            SymbolKind::Class | SymbolKind::Struct => 1.1,
+            SymbolKind::Trait | SymbolKind::Interface => 1.05,
+            SymbolKind::Enum => 1.0,
             SymbolKind::Module => 0.9,
             SymbolKind::Constant => 0.8,
         };
-
         // Documentation boost
         if result.symbol.docstring.is_some() {
             boost *= 1.15;

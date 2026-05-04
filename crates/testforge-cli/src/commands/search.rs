@@ -80,6 +80,13 @@ pub fn run(args: SearchArgs) -> anyhow::Result<()> {
 
         // Apply re-ranking pipeline
         ranking::rerank(&mut res);
+        apply_query_match_boost(&mut res, &args.query);
+        // Sort by score after reranking
+        res.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         ranking::deduplicate(&mut res);
         ranking::diversify(&mut res, 5);
         res.truncate(args.limit);
@@ -128,6 +135,13 @@ pub fn run(args: SearchArgs) -> anyhow::Result<()> {
             .collect();
 
         ranking::rerank(&mut fallback);
+        apply_query_match_boost(&mut fallback, &args.query);
+        // Sort by score after reranking
+        fallback.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         fallback.truncate(args.limit);
         results = fallback;
     }
@@ -215,6 +229,29 @@ pub fn run(args: SearchArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn apply_query_match_boost(results: &mut [testforge_core::models::SearchResult], query: &str) {
+    let query_lower = query.to_lowercase();
+
+    for result in results.iter_mut() {
+        let name = result.symbol.name.to_lowercase();
+        let qualified = result.symbol.qualified_name.to_lowercase();
+
+        let multiplier = if name == query_lower || qualified == query_lower {
+            3.0
+        } else if qualified.ends_with(&format!(".{query_lower}")) {
+            2.5
+        } else if name.starts_with(&query_lower) {
+            1.8
+        } else if name.contains(&query_lower) || qualified.contains(&query_lower) {
+            1.2
+        } else {
+            1.0
+        };
+
+        result.score *= multiplier;
+    }
 }
 
 fn parse_language(s: &str) -> Option<Language> {
