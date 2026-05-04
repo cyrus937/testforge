@@ -14,6 +14,7 @@
 //! - **Persistence** — vectors are serialized to disk as a compact binary
 //!   format for fast startup.
 
+use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 
 use ordered_float::OrderedFloat;
@@ -241,7 +242,7 @@ impl VectorStore {
             .collect();
 
         // Sort descending by score
-        scored.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        scored.sort_unstable_by_key(|item| Reverse(item.1));
         scored.truncate(limit);
 
         let matches = scored
