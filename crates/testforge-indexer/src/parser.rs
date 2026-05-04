@@ -142,7 +142,8 @@ class Calculator:
     #[test]
     fn unsupported_language_returns_error() {
         let mut parser = Parser::new().unwrap();
-        let result = parser.parse_and_extract("namespace Main {}", Language::CSharp, Path::new("main.cs"));
+        let result =
+            parser.parse_and_extract("namespace Main {}", Language::CSharp, Path::new("main.cs"));
         assert!(result.is_err());
     }
 }

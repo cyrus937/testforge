@@ -17,11 +17,10 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 import shutil
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +47,10 @@ class SymbolInfo:
     start_line: int
     end_line: int
     source: str
-    signature: Optional[str] = None
-    docstring: Optional[str] = None
+    signature: str | None = None
+    docstring: str | None = None
     dependencies: list[str] = field(default_factory=list)
-    parent: Optional[str] = None
+    parent: str | None = None
     visibility: str = "public"
     content_hash: str = ""
 
@@ -68,7 +67,7 @@ class IndexStatusInfo:
     symbol_count: int
     embedding_count: int
     languages: list[str]
-    last_indexed: Optional[str] = None
+    last_indexed: str | None = None
     watcher_active: bool = False
 
 
@@ -170,7 +169,7 @@ class TestForgeBridge:
 
         return {"output": result.stdout}
 
-    def get_symbol_source(self, qualified_name: str) -> Optional[str]:
+    def get_symbol_source(self, qualified_name: str) -> str | None:
         """Get the source code of a specific symbol by qualified name."""
         symbols = self.get_all_symbols()
         for sym in symbols:

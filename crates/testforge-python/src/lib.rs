@@ -16,8 +16,8 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use testforge_core::{Config};
 use testforge_core::models::Language;
+use testforge_core::Config;
 use testforge_indexer::{self, Indexer, Parser};
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -28,10 +28,10 @@ fn to_py_err(e: testforge_core::TestForgeError) -> PyErr {
 }
 
 /// Serialize a serde-compatible value to a Python dict.
+#[allow(unused)]
 fn to_py_dict(py: Python<'_>, value: &impl serde::Serialize) -> PyResult<Py<PyDict>> {
-    let json = serde_json::to_string(value).map_err(|e| {
-        PyRuntimeError::new_err(format!("serialization error: {e}"))
-    })?;
+    let json = serde_json::to_string(value)
+        .map_err(|e| PyRuntimeError::new_err(format!("serialization error: {e}")))?;
     let dict: Py<PyDict> = py
         .import("json")?
         .call_method1("loads", (json,))?
@@ -62,11 +62,12 @@ fn parse_source(
     let lang = parse_language(language)?;
     let path = PathBuf::from(file_path);
     let mut parser = Parser::new().map_err(to_py_err)?;
-    let symbols =
-        parser.parse_and_extract(source, lang, &path).map_err(to_py_err)?;
+    let symbols = parser
+        .parse_and_extract(source, lang, &path)
+        .map_err(to_py_err)?;
 
-    let json = serde_json::to_string(&symbols)
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let json =
+        serde_json::to_string(&symbols).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     let result = py.import("json")?.call_method1("loads", (json,))?;
     Ok(result.into())
 }
@@ -81,11 +82,7 @@ fn parse_source(
 ///     A dict with keys: symbols, files, stats, graph_edges.
 #[pyfunction]
 #[pyo3(signature = (root, config_path=None))]
-fn index_project(
-    py: Python<'_>,
-    root: &str,
-    config_path: Option<&str>,
-) -> PyResult<PyObject> {
+fn index_project(py: Python<'_>, root: &str, config_path: Option<&str>) -> PyResult<PyObject> {
     let root_path = PathBuf::from(root);
 
     let config = match config_path {
@@ -108,8 +105,8 @@ fn index_project(
         }).collect::<Vec<_>>(),
     });
 
-    let json = serde_json::to_string(&summary)
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let json =
+        serde_json::to_string(&summary).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     let result = py.import("json")?.call_method1("loads", (json,))?;
     Ok(result.into())
 }
