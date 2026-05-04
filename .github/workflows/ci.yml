@@ -49,13 +49,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy lints
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude testforge-python --all-targets -- -D warnings
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude testforge-python
 
       - name: Build release
-        run: cargo build --release
+        run: cargo build --workspace --exclude testforge-python --release
 
   python:
     name: Python
