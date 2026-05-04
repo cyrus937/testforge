@@ -25,7 +25,6 @@ pub fn rerank(results: &mut [SearchResult]) {
             Visibility::Private => 0.85,
         };
 
-
         // Kind boost — classes/structs are primary entities worth highlighting
         boost *= match result.symbol.kind {
             SymbolKind::Function | SymbolKind::Method => 0.95,
